@@ -16,13 +16,21 @@ EMAIL = os.getenv("SLACK_EMAIL")
 PASSWORD = os.getenv("SLACK_PASSWORD")
 
 
+def parse_bool(value, default=False):
+    if value is None:
+        return default
+    return value.strip().lower() in {"1", "true", "yes", "y", "on"}
+
+HEADLESS = parse_bool(os.getenv("HEADLESS"), default=False)
+
+
 def login_and_save_session():
     # Log into Slack and store session cookies locally
     print("🔐 No session found - logging into Slack")
 
     with sync_playwright() as p:
         # Launch a visible browser so login works reliably
-        browser = p.chromium.launch(headless=False)
+        browser = p.chromium.launch(headless=HEADLESS)
 
         # Create a fresh browser context (clean session)
         context = browser.new_context()
@@ -61,7 +69,7 @@ def is_session_valid():
         return False
 
     with sync_playwright() as p:
-        browser = p.chromium.launch(headless=False)
+        browser = p.chromium.launch(headless=HEADLESS)
         try:
             # Load the stored session
             context = browser.new_context(storage_state=SESSION_FILE)
@@ -95,7 +103,7 @@ def mark_present():
     print("🟢 Marking attendance as PRESENT")
 
     with sync_playwright() as p:
-        browser = p.chromium.launch(headless=False)
+        browser = p.chromium.launch(headless=HEADLESS)
 
         # Use stored session so no login is needed
         context = browser.new_context(storage_state=SESSION_FILE)
