@@ -1,0 +1,7 @@
+[Unit]
+Description=Slack Attendance Bot
+
+[Service]
+Type=oneshot
+WorkingDirectory=/home/youruser/Projects/slack-attendance-bot
+ExecStart=/usr/bin/python3 /home/youruser/Projects/slack-attendance-bot/attendance_bot.py

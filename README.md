@@ -6,7 +6,7 @@ A small Playwright-based bot that logs into Slack and marks the latest attendanc
 - Logs in once, then reuses the saved session (`slack_auth.json`)
 - Validates the session before each run and re-authenticates if needed
 - Marks the newest "Present" radio option in the target channel
-- Designed to run as a single execution (schedule externally with cron/systemd)
+- Designed to run as a single execution (schedule externally)
 
 ## Requirements
 - Python 3.9+
@@ -50,11 +50,28 @@ python attendance_bot.py
 - Subsequent runs use the stored session in headless mode.
 - If the session is invalid or expired, the bot re-authenticates.
 
-## Scheduling (example: cron)
-Because the script is single-run, schedule it externally:
+## Scheduling
+Because the script is single-run, schedule it externally. Example configs are in `examples/`.
+
+### Linux (cron)
+- Use `crontab -e` and paste the contents of `examples/cron.txt`.
+- Update the Python path and project path to match your environment.
+
+### Linux (systemd user timer)
+1. Copy `examples/slack-attendance-bot.service` and `examples/slack-attendance-bot.timer` to `~/.config/systemd/user/`.
+2. Update paths inside both files.
+3. Run:
 ```bash
-# Every weekday at 09:05 and 14:05
-5 9,14 * * 1-5 /usr/bin/python /path/to/attendance_bot.py
+systemctl --user daemon-reload
+systemctl --user enable --now slack-attendance-bot.timer
+```
+
+### macOS (launchd)
+1. Copy `examples/com.jaywee.slack-attendance-bot.plist` to `~/Library/LaunchAgents/`.
+2. Update paths inside the plist.
+3. Load it:
+```bash
+launchctl load -w ~/Library/LaunchAgents/com.jaywee.slack-attendance-bot.plist
 ```
 
 ## Security Notes

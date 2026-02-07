@@ -1,0 +1,10 @@
+[Unit]
+Description=Run Slack Attendance Bot twice daily
+
+[Timer]
+OnCalendar=Mon..Fri 09:05
+OnCalendar=Mon..Fri 14:05
+Persistent=true
+
+[Install]
+WantedBy=timers.target
