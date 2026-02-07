@@ -61,7 +61,7 @@ def is_session_valid():
         return False
 
     with sync_playwright() as p:
-        browser = p.chromium.launch(headless=True)
+        browser = p.chromium.launch(headless=False)
         try:
             # Load the stored session
             context = browser.new_context(storage_state=SESSION_FILE)
@@ -95,7 +95,7 @@ def mark_present():
     print("🟢 Marking attendance as PRESENT")
 
     with sync_playwright() as p:
-        browser = p.chromium.launch(headless=True)
+        browser = p.chromium.launch(headless=False)
 
         # Use stored session so no login is needed
         context = browser.new_context(storage_state=SESSION_FILE)

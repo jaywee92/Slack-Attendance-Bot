@@ -45,6 +45,8 @@ python attendance_bot.py
 ```
 
 ## How It Works
+Note: All Playwright browsers are currently started with `headless=False`. After the first successful run, change all `headless` flags to `True` for fully headless execution.
+
 - On the first run, a visible browser window opens so you can log in.
 - A session is saved to `slack_auth.json`.
 - Subsequent runs use the stored session in headless mode.
