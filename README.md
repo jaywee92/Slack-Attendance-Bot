@@ -69,6 +69,23 @@ systemctl --user daemon-reload
 systemctl --user enable --now slack-attendance-bot.timer
 ```
 
+
+### Windows (Task Scheduler)
+1. Open **Task Scheduler** and choose **Create Task**.
+2. **General**: give it a name (e.g., Slack Attendance Bot).
+3. **Triggers**: create two triggers at 09:05 and 14:05 (or your desired times).
+4. **Actions**: Start a program.
+   - **Program/script**: the full path to `python.exe` (e.g., `C:\Users\you\AppData\Local\Programs\Python\Python311\python.exe`)
+   - **Add arguments**: the full path to `attendance_bot.py`
+   - **Start in**: the project folder (so `.env` is found)
+5. Save the task.
+
+Optional CLI example:
+```bat
+schtasks /Create /TN "Slack Attendance Bot AM" /TR "C:\Path\To\python.exe C:\Path\To\attendance_bot.py" /SC WEEKLY /D MON,TUE,WED,THU,FRI /ST 09:05
+schtasks /Create /TN "Slack Attendance Bot PM" /TR "C:\Path\To\python.exe C:\Path\To\attendance_bot.py" /SC WEEKLY /D MON,TUE,WED,THU,FRI /ST 14:05
+```
+
 ### macOS (launchd)
 1. Copy `examples/com.jaywee.slack-attendance-bot.plist` to `~/Library/LaunchAgents/`.
 2. Update paths inside the plist.
