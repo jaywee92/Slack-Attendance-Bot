@@ -128,9 +128,31 @@ def mark_present():
         # Click the newest "present" option
         newest_present = present_radios.nth(count - 1)
         newest_present.scroll_into_view_if_needed()
+
+        # Prepare confirmation message check (from the Mia Attendance Bot)
+        confirmation_text = "Your selection (present) has been recorded successfully"
+        confirmation_locator = page.locator(
+            "div.p-rich_text_section",
+            has_text=confirmation_text,
+        )
+        previous_confirmations = confirmation_locator.count()
+
         newest_present.check()
 
-        print("✅ Attendance successfully marked")
+        # Wait for the new confirmation message
+        confirmed = False
+        timeout_s = 15
+        start = time.time()
+        while time.time() - start < timeout_s:
+            if confirmation_locator.count() > previous_confirmations:
+                confirmed = True
+                break
+            time.sleep(0.5)
+
+        if confirmed:
+            print("✅ Attendance recorded: confirmation message detected")
+        else:
+            print("⚠️ Attendance clicked, but confirmation message not found")
 
         # Small delay to ensure the click is registered
         time.sleep(3)
