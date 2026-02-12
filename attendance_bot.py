@@ -158,6 +158,60 @@ def get_latest_survey_root(page):
     return page
 
 
+def dismiss_cookie_or_privacy_overlays(page):
+    selectors = [
+        "#onetrust-accept-btn-handler",
+        'button:has-text("Accept All")',
+        'button:has-text("Accept all")',
+        'button:has-text("Allow all")',
+        'button:has-text("I agree")',
+        'button:has-text("I Accept")',
+    ]
+
+    for frame in page.frames:
+        for selector in selectors:
+            try:
+                button = frame.locator(selector).first
+                if button.count() > 0 and button.is_visible():
+                    log_state("COOKIE_BANNER_DETECTED", selector)
+                    button.click(timeout=3000)
+                    page.wait_for_timeout(1200)
+                    log_state("COOKIE_BANNER_ACCEPTED", selector)
+                    return True
+            except Exception:
+                continue
+
+    return False
+
+
+def wait_for_channel_content(page, timeout_s=45):
+    markers = [
+        '[data-qa="message_pane"]',
+        '[data-qa="message_content"]',
+        "div.c-virtual_list__scroll_container",
+        '[data-qa="channel_header"]',
+    ]
+    deadline = time.time() + timeout_s
+
+    while time.time() < deadline:
+        dismiss_cookie_or_privacy_overlays(page)
+
+        for selector in markers:
+            try:
+                if page.locator(selector).count() > 0:
+                    return True
+            except Exception:
+                continue
+
+        if is_signin_url(page.url):
+            return False
+
+        nudge_to_latest_messages(page)
+        page.wait_for_timeout(1000)
+
+    return False
+
+
 def capture_debug_artifacts(page):
     screenshot_path = os.getenv("ATTENDANCE_DEBUG_SCREENSHOT", "attendance_debug.png")
     html_path = os.getenv("ATTENDANCE_DEBUG_HTML", "attendance_debug.html")
@@ -357,15 +411,18 @@ def mark_present():
 
         # Slack can be slow to load
         time.sleep(20)
+        dismiss_cookie_or_privacy_overlays(page)
 
         # Try to wait for message pane to render before selector lookups.
-        try:
-            page.wait_for_selector(
-                '[data-qa="message_pane"], [data-qa="message_content"]',
-                timeout=20000,
+        if not wait_for_channel_content(page, timeout_s=45):
+            logger.warning(
+                "Message pane selector did not appear within timeout | url=%s",
+                page.url,
             )
-        except Exception:
-            logger.warning("Message pane selector did not appear within timeout")
+            try:
+                logger.warning("Page title while waiting: %s", page.title())
+            except Exception:
+                pass
 
         try:
             body_text = page.locator("body").inner_text(timeout=3000).lower()
