@@ -37,6 +37,7 @@ WORKSPACE_DOMAIN=wbscodingschool.slack.com
 WORKSPACE_SLUG=wbscodingschool
 WORKSPACE_SIGNIN_MAX_ATTEMPTS=12
 SESSION_FILE=slack_auth.json
+BROWSER_PROFILE_DIR=
 HEADLESS=false
 ALLOW_INTERACTIVE_LOGIN=false
 LOG_LEVEL=INFO
@@ -60,6 +61,7 @@ Note: The script reads `HEADLESS`, `ALLOW_INTERACTIVE_LOGIN`, `LOG_LEVEL`, and `
 - `WORKSPACE_DOMAIN` points to your Slack workspace (e.g. `wbscodingschool.slack.com`).
 - `WORKSPACE_SLUG` is used when Slack shows the "Find your workspace" screen.
 - `WORKSPACE_SIGNIN_MAX_ATTEMPTS` limits workspace-signin retries before hard fail.
+- `BROWSER_PROFILE_DIR` (recommended on VPS) enables a persistent Chromium profile and is more reliable than cookies-only state.
 - A session is saved to `slack_auth.json`.
 - Subsequent runs use the stored session.
 - If `ALLOW_INTERACTIVE_LOGIN=false` and session is invalid, the bot exits instead of trying login.
@@ -93,10 +95,11 @@ Logging options:
 ## VPS / Docker Bootstrap (Secure Code)
 Use this flow on terminal-only hosts when Slack requires a one-time security code:
 1. Set `ALLOW_INTERACTIVE_LOGIN=true` in `.env`.
-2. Run the container interactively (`-it`) once so `input()` can prompt for the code.
-3. Enter the security code in the terminal prompt.
-4. Verify that `slack_auth.json` was created in your mounted persistent volume.
-5. Set `ALLOW_INTERACTIVE_LOGIN=false` for normal scheduled runs.
+2. Set `BROWSER_PROFILE_DIR=/session/playwright-profile` in `.env` (recommended).
+3. Run the container interactively (`-it`) once so `input()` can prompt for the code.
+4. Enter the security code in the terminal prompt.
+5. Verify that profile/session data was created in your mounted persistent volume.
+6. Set `ALLOW_INTERACTIVE_LOGIN=false` for normal scheduled runs.
 
 Example bootstrap run:
 ```bash

@@ -14,6 +14,7 @@ EMAIL = os.getenv("SLACK_EMAIL")
 PASSWORD = os.getenv("SLACK_PASSWORD")
 SESSION_FILE = os.getenv("SESSION_FILE", "slack_auth.json")
 WORKSPACE_DOMAIN = os.getenv("WORKSPACE_DOMAIN", "wbscodingschool.slack.com")
+BROWSER_PROFILE_DIR = os.getenv("BROWSER_PROFILE_DIR", "").strip()
 LOG_FILE = os.getenv("LOG_FILE")
 LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO").upper()
 
@@ -59,6 +60,40 @@ CHANNEL_URLS = [
 WORKSPACE_SIGNIN_MAX_ATTEMPTS = int(os.getenv("WORKSPACE_SIGNIN_MAX_ATTEMPTS", "12"))
 WORKSPACE_CANDIDATES = [WORKSPACE_SLUG]
 workspace_signin_attempts = 0
+
+
+def use_persistent_profile():
+    return bool(BROWSER_PROFILE_DIR)
+
+
+def launch_context(playwright, use_saved_state=True):
+    if use_persistent_profile():
+        os.makedirs(BROWSER_PROFILE_DIR, exist_ok=True)
+        context = playwright.chromium.launch_persistent_context(
+            user_data_dir=BROWSER_PROFILE_DIR,
+            headless=HEADLESS,
+        )
+        return None, context
+
+    browser = playwright.chromium.launch(headless=HEADLESS)
+    if (
+        use_saved_state
+        and os.path.exists(SESSION_FILE)
+        and os.path.getsize(SESSION_FILE) > 0
+    ):
+        context = browser.new_context(storage_state=SESSION_FILE)
+    else:
+        context = browser.new_context()
+    return browser, context
+
+
+def close_context(browser, context):
+    try:
+        if context:
+            context.close()
+    finally:
+        if browser:
+            browser.close()
 
 
 def is_signin_url(url):
@@ -427,11 +462,8 @@ def login_and_save_session():
     log_state("LOGIN_REQUIRED", "No valid session found")
 
     with sync_playwright() as p:
-        # Headless mode is controlled through the HEADLESS env variable.
-        browser = p.chromium.launch(headless=HEADLESS)
-
-        # Create a fresh browser context (clean session)
-        context = browser.new_context()
+        # Create a fresh browser context for login.
+        browser, context = launch_context(p, use_saved_state=False)
         page = context.new_page()
 
         # Open Slack login page
@@ -467,8 +499,10 @@ def login_and_save_session():
         # Save session cookies and storage for later reuse
         context.storage_state(path=SESSION_FILE)
         log_state("SESSION_SAVED", SESSION_FILE)
+        if use_persistent_profile():
+            log_state("PROFILE_SAVED", BROWSER_PROFILE_DIR)
 
-        browser.close()
+        close_context(browser, context)
 
 
 def is_session_valid():
@@ -479,10 +513,9 @@ def is_session_valid():
         return False
 
     with sync_playwright() as p:
-        browser = p.chromium.launch(headless=HEADLESS)
+        browser, context = launch_context(p, use_saved_state=True)
         try:
-            # Load the stored session
-            context = browser.new_context(storage_state=SESSION_FILE)
+            # Load stored session/profile
             page = context.new_page()
 
             # Open target workspace/channel to verify login.
@@ -498,7 +531,7 @@ def is_session_valid():
             logger.warning("Session validation failed, will re-login: %s", exc)
             return False
         finally:
-            browser.close()
+            close_context(browser, context)
 
 
 def mark_present():
@@ -506,10 +539,8 @@ def mark_present():
     log_state("ATTENDANCE_ATTEMPT_STARTED")
 
     with sync_playwright() as p:
-        browser = p.chromium.launch(headless=HEADLESS)
-
-        # Use stored session so no login is needed
-        context = browser.new_context(storage_state=SESSION_FILE)
+        # Use stored session/profile so no login is needed
+        browser, context = launch_context(p, use_saved_state=True)
         page = context.new_page()
 
         # Open the Slack channel where the attendance form exists
@@ -524,7 +555,7 @@ def mark_present():
         if not wait_for_channel_content(page, timeout_s=45):
             if is_signin_url(page.url):
                 logger.error("STATE=SESSION_REAUTH_REQUIRED | %s", page.url)
-                browser.close()
+                close_context(browser, context)
                 return "SESSION_REAUTH_REQUIRED"
             logger.warning(
                 "Message pane selector did not appear within timeout | url=%s",
@@ -536,7 +567,7 @@ def mark_present():
                 pass
             logger.error("STATE=CHANNEL_CONTENT_NOT_AVAILABLE")
             capture_debug_artifacts(page)
-            browser.close()
+            close_context(browser, context)
             return "CHANNEL_CONTENT_NOT_AVAILABLE"
 
         try:
@@ -553,7 +584,7 @@ def mark_present():
         closed_message = find_closed_survey_message(page)
         if closed_message:
             log_state("SURVEY_CLOSED", closed_message)
-            browser.close()
+            close_context(browser, context)
             return "SURVEY_CLOSED"
 
         action, present_options, count = find_present_option(page)
@@ -561,12 +592,12 @@ def mark_present():
             closed_message = find_closed_survey_message(page)
             if closed_message:
                 log_state("SURVEY_CLOSED", closed_message)
-                browser.close()
+                close_context(browser, context)
                 return "SURVEY_CLOSED"
 
             logger.error("STATE=PRESENT_OPTION_NOT_FOUND")
             capture_debug_artifacts(page)
-            browser.close()
+            close_context(browser, context)
             return "PRESENT_OPTION_NOT_FOUND"
 
         # Select the newest "present" option
@@ -606,20 +637,20 @@ def mark_present():
             log_state("PRESENT_RECORDED", confirmation_text)
             # Small delay to ensure the click is registered
             time.sleep(3)
-            browser.close()
+            close_context(browser, context)
             return "PRESENT_RECORDED"
 
         closed_message = find_closed_survey_message(page)
         if closed_message:
             log_state("SURVEY_CLOSED_AFTER_ATTEMPT", closed_message)
-            browser.close()
+            close_context(browser, context)
             return "SURVEY_CLOSED"
 
         logger.warning("STATE=NO_CONFIRMATION_AFTER_CLICK")
         capture_debug_artifacts(page)
         # Small delay to ensure the click is registered
         time.sleep(3)
-        browser.close()
+        close_context(browser, context)
         return "NO_CONFIRMATION_AFTER_CLICK"
 
 
