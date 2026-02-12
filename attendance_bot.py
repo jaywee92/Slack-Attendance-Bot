@@ -247,9 +247,18 @@ def wait_for_channel_content(page, timeout_s=45):
                 continue
 
         if is_signin_url(page.url):
+            log_state("WORKSPACE_SIGNIN_DETECTED", page.url)
+            handled = handle_workspace_signin(page)
+            if handled:
+                goto_channel(page, timeout_ms=15000)
+                page.wait_for_timeout(1000)
+                continue
             return False
 
         nudge_to_latest_messages(page)
+        # Re-open the channel if Slack navigated away from the target content.
+        if not is_authenticated_client_url(page.url):
+            goto_channel(page, timeout_ms=15000)
         page.wait_for_timeout(1000)
 
     return False
@@ -421,14 +430,11 @@ def is_session_valid():
             goto_channel(page, timeout_ms=15000)
             page.wait_for_load_state("domcontentloaded")
 
-            timeout_s = 25
-            start = time.time()
-            while time.time() - start < timeout_s:
-                if is_authenticated_client_url(page.url):
-                    return True
-                page.wait_for_timeout(1000)
+            if not is_authenticated_client_url(page.url):
+                return False
 
-            return False
+            # Session is valid only when real channel content is available.
+            return wait_for_channel_content(page, timeout_s=20)
         except Exception as exc:
             # Any error -> treat as invalid session
             logger.warning("Session validation failed, will re-login: %s", exc)
@@ -466,6 +472,10 @@ def mark_present():
                 logger.warning("Page title while waiting: %s", page.title())
             except Exception:
                 pass
+            logger.error("STATE=CHANNEL_CONTENT_NOT_AVAILABLE")
+            capture_debug_artifacts(page)
+            browser.close()
+            return "CHANNEL_CONTENT_NOT_AVAILABLE"
 
         try:
             body_text = page.locator("body").inner_text(timeout=3000).lower()
