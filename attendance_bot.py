@@ -53,8 +53,8 @@ CLOSED_SURVEY_PATTERNS = [
 
 WORKSPACE_SLUG = os.getenv("WORKSPACE_SLUG", WORKSPACE_DOMAIN.split(".")[0])
 CHANNEL_URLS = [
-    f"https://app.slack.com/client/{TEAM_ID}/{CHANNEL_ID}",
     f"https://{WORKSPACE_DOMAIN}/archives/{CHANNEL_ID}",
+    f"https://app.slack.com/client/{TEAM_ID}/{CHANNEL_ID}",
 ]
 WORKSPACE_SIGNIN_MAX_ATTEMPTS = int(os.getenv("WORKSPACE_SIGNIN_MAX_ATTEMPTS", "12"))
 WORKSPACE_CANDIDATES = [WORKSPACE_SLUG]
@@ -68,9 +68,11 @@ def is_signin_url(url):
 
 def is_authenticated_client_url(url):
     value = (url or "").lower()
+    app_target = f"app.slack.com/client/{TEAM_ID.lower()}/{CHANNEL_ID.lower()}"
+    workspace_target = f"{WORKSPACE_DOMAIN.lower()}/archives/{CHANNEL_ID.lower()}"
     return (
-        ("app.slack.com/client" in value and not is_signin_url(value))
-        or (WORKSPACE_DOMAIN.lower() in value and "/archives/" in value and not is_signin_url(value))
+        not is_signin_url(value)
+        and (app_target in value or workspace_target in value)
     )
 
 
@@ -306,12 +308,7 @@ def wait_for_channel_content(page, timeout_s=45):
                 continue
 
         if is_signin_url(page.url):
-            log_state("WORKSPACE_SIGNIN_DETECTED", page.url)
-            handled = handle_workspace_signin(page)
-            if handled:
-                goto_channel(page, timeout_ms=15000)
-                page.wait_for_timeout(1000)
-                continue
+            log_state("SESSION_REAUTH_REQUIRED", page.url)
             return False
 
         nudge_to_latest_messages(page)
@@ -525,6 +522,10 @@ def mark_present():
 
         # Try to wait for message pane to render before selector lookups.
         if not wait_for_channel_content(page, timeout_s=45):
+            if is_signin_url(page.url):
+                logger.error("STATE=SESSION_REAUTH_REQUIRED | %s", page.url)
+                browser.close()
+                return "SESSION_REAUTH_REQUIRED"
             logger.warning(
                 "Message pane selector did not appear within timeout | url=%s",
                 page.url,
@@ -636,7 +637,7 @@ def ensure_session():
         return False
 
     login_and_save_session()
-    return True
+    return is_session_valid()
 
 
 def run_once():
