@@ -73,10 +73,8 @@ if WORKSPACE_SLUG.endswith(".slack.com"):
     WORKSPACE_SLUG = WORKSPACE_SLUG[: -len(".slack.com")]
 
 WORKSPACE_ARCHIVE_URL = f"https://{WORKSPACE_DOMAIN}/archives/{CHANNEL_ID}"
-WORKSPACE_CLIENT_URL = f"https://{WORKSPACE_DOMAIN}/client/{TEAM_ID}/{CHANNEL_ID}"
 APP_CHANNEL_URL = f"https://app.slack.com/client/{TEAM_ID}/{CHANNEL_ID}"
 CHANNEL_URLS = [
-    WORKSPACE_CLIENT_URL,
     WORKSPACE_ARCHIVE_URL,
     APP_CHANNEL_URL,
 ]
@@ -154,15 +152,24 @@ def is_expected_slack_host(url):
 
 
 def is_authenticated_client_url(url):
-    value = (url or "").lower()
     if not is_expected_slack_host(url):
         return False
+
+    host = get_url_host(url)
+    value = (url or "").lower()
+    if is_signin_url(value):
+        return False
+
     client_target = f"/client/{TEAM_ID.lower()}/{CHANNEL_ID.lower()}"
-    workspace_archive_target = f"{WORKSPACE_DOMAIN.lower()}/archives/{CHANNEL_ID.lower()}"
-    return (
-        not is_signin_url(value)
-        and (client_target in value or workspace_archive_target in value)
-    )
+    workspace_archive_target = f"/archives/{CHANNEL_ID.lower()}"
+
+    if host == "app.slack.com":
+        return client_target in value
+
+    if host == WORKSPACE_DOMAIN.lower():
+        return workspace_archive_target in value
+
+    return False
 
 
 def click_auth_action_button(page):
@@ -294,6 +301,9 @@ def goto_channel(page, timeout_ms=15000):
     for url in CHANNEL_URLS:
         try:
             page.goto(url, wait_until="domcontentloaded", timeout=timeout_ms)
+            if is_glitch_page(page):
+                log_state("GLITCH_PAGE_DETECTED", page.url)
+                continue
             if is_authenticated_client_url(page.url):
                 return
             handle_workspace_signin(page)
