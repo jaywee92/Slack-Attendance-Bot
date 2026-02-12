@@ -413,6 +413,22 @@ def wait_for_channel_content(page, timeout_s=45):
     return False
 
 
+def has_channel_markers(page):
+    markers = [
+        '[data-qa="message_pane"]',
+        '[data-qa="message_content"]',
+        "div.c-virtual_list__scroll_container",
+        '[data-qa="channel_header"]',
+    ]
+    for selector in markers:
+        try:
+            if page.locator(selector).count() > 0:
+                return True
+        except Exception:
+            continue
+    return False
+
+
 def capture_debug_artifacts(page):
     screenshot_path = os.getenv("ATTENDANCE_DEBUG_SCREENSHOT", "attendance_debug.png")
     html_path = os.getenv("ATTENDANCE_DEBUG_HTML", "attendance_debug.html")
@@ -584,11 +600,24 @@ def is_session_valid():
             page.wait_for_load_state("domcontentloaded")
 
             if is_signin_url(page.url):
+                log_state("SESSION_INVALID_SIGNIN_URL", page.url)
                 return False
 
-            # Guard against delayed redirect back to workspace-signin.
-            if not wait_for_channel_content(page, timeout_s=20):
-                return False
+            # Prefer channel-content markers, but accept slow Slack UI when URL stays authenticated.
+            if has_channel_markers(page):
+                return True
+
+            deadline = time.time() + 15
+            while time.time() < deadline:
+                dismiss_cookie_or_privacy_overlays(page)
+                if is_signin_url(page.url):
+                    log_state("SESSION_REAUTH_REQUIRED", page.url)
+                    return False
+                if has_channel_markers(page):
+                    return True
+                page.wait_for_timeout(1000)
+
+            log_state("SESSION_VALID_NO_CHANNEL_MARKERS", page.url)
 
             return True
         except Exception as exc:
@@ -733,7 +762,17 @@ def ensure_session():
         return False
 
     login_and_save_session()
-    return is_session_valid()
+    if is_session_valid():
+        log_state("SESSION_VALID_AFTER_LOGIN")
+        return True
+
+    # In some headless VPS environments Slack channel markers are delayed.
+    # Proceed to attendance attempt and let mark_present handle hard reauth errors.
+    logger.warning(
+        "STATE=SESSION_VALIDATION_SOFT_FAIL_AFTER_LOGIN | "
+        "Proceeding with attendance attempt."
+    )
+    return True
 
 
 def run_once():
