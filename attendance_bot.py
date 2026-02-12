@@ -351,6 +351,29 @@ def nudge_to_latest_messages(page):
         pass
 
 
+def nudge_message_history(page, direction="down"):
+    delta_sign = 1 if direction == "down" else -1
+    try:
+        page.evaluate(
+            """(directionSign) => {
+                const selectors = [
+                    'div.c-virtual_list__scroll_container',
+                    '[data-qa="message_pane"]',
+                    '[data-qa="slack_kit_list_container"]',
+                ];
+                for (const selector of selectors) {
+                    const node = document.querySelector(selector);
+                    if (!node) continue;
+                    const step = Math.max(400, Math.floor(node.clientHeight * 0.8));
+                    node.scrollTop = node.scrollTop + (directionSign * step);
+                }
+            }""",
+            delta_sign,
+        )
+    except Exception:
+        pass
+
+
 def get_latest_survey_root(page):
     # Focus the latest survey card from Mia, if present.
     survey_cards = page.locator('div[role="document"]', has_text="Please select an option")
@@ -453,6 +476,7 @@ def find_present_option(page):
         ("input-id", "check", root.locator('input[type="radio"][id*="-present-"]')),
         ("input-value", "check", root.locator('input[type="radio"][value="present"]')),
         ("input-aria", "check", root.locator('input[type="radio"][aria-label*="present" i]')),
+        ("text-contains", "click", root.get_by_text("present")),
         ("text-exact", "click", root.get_by_text("present", exact=True)),
         (
             "text-regex",
@@ -470,12 +494,21 @@ def find_present_option(page):
                 logger.debug("Matched present selector %s (%s elements)", name, count)
                 return action, locator, count
 
-        # Slack can lazily render message blocks; keep nudging to latest messages.
-        nudge_to_latest_messages(page)
-        try:
-            page.keyboard.press("End")
-        except Exception:
-            pass
+        elapsed = time.time() - start
+        # Slack lazily renders content. Start at latest messages, then search upward.
+        if elapsed < timeout_s * 0.5:
+            nudge_to_latest_messages(page)
+            nudge_message_history(page, direction="down")
+            try:
+                page.keyboard.press("End")
+            except Exception:
+                pass
+        else:
+            nudge_message_history(page, direction="up")
+            try:
+                page.keyboard.press("PageUp")
+            except Exception:
+                pass
         page.wait_for_timeout(1000)
 
     return None, None, 0
