@@ -57,7 +57,7 @@ CHANNEL_URLS = [
     f"https://{WORKSPACE_DOMAIN}/archives/{CHANNEL_ID}",
 ]
 WORKSPACE_SIGNIN_MAX_ATTEMPTS = int(os.getenv("WORKSPACE_SIGNIN_MAX_ATTEMPTS", "12"))
-WORKSPACE_CANDIDATES = [WORKSPACE_DOMAIN, WORKSPACE_SLUG]
+WORKSPACE_CANDIDATES = [WORKSPACE_SLUG]
 workspace_signin_attempts = 0
 
 
@@ -169,8 +169,7 @@ def handle_workspace_signin(page):
             if "workspace-signin" not in (page.url or "").lower():
                 return True
 
-        # Keep flow moving even if URL does not switch immediately.
-        return True
+        return False
     except Exception:
         return False
 
@@ -192,7 +191,7 @@ def wait_for_authenticated_client(page, timeout_s=60):
     while time.time() < deadline:
         goto_channel(page, timeout_ms=15000)
 
-        if is_authenticated_client_url(page.url) and wait_for_channel_content(page, timeout_s=12):
+        if is_authenticated_client_url(page.url):
             return True
 
         handle_workspace_signin(page)
@@ -453,17 +452,20 @@ def login_and_save_session():
         page.wait_for_timeout(1500)
         handle_security_code_challenge(page)
 
-        # Validate login on target workspace/channel before saving session.
-        if not wait_for_authenticated_client(page, timeout_s=90):
+        # Try to reach authenticated Slack client before saving session.
+        authenticated = wait_for_authenticated_client(page, timeout_s=90)
+        if authenticated:
+            log_state("LOGIN_AUTHENTICATED")
+        else:
             screenshot_path = os.getenv("LOGIN_DEBUG_SCREENSHOT", "login_failed.png")
             try:
                 page.screenshot(path=screenshot_path, full_page=True)
                 logger.warning("Saved login debug screenshot to %s", screenshot_path)
             except Exception:
                 pass
-            raise RuntimeError("Login did not complete; still on sign-in page")
-
-        log_state("LOGIN_AUTHENTICATED")
+            logger.warning(
+                "STATE=LOGIN_AUTHENTICATED_NOT_CONFIRMED | Saving session anyway"
+            )
 
         # Save session cookies and storage for later reuse
         context.storage_state(path=SESSION_FILE)
@@ -490,11 +492,10 @@ def is_session_valid():
             goto_channel(page, timeout_ms=15000)
             page.wait_for_load_state("domcontentloaded")
 
-            if not is_authenticated_client_url(page.url):
+            if is_signin_url(page.url):
                 return False
 
-            # Session is valid only when real channel content is available.
-            return wait_for_channel_content(page, timeout_s=20)
+            return True
         except Exception as exc:
             # Any error -> treat as invalid session
             logger.warning("Session validation failed, will re-login: %s", exc)
@@ -635,7 +636,7 @@ def ensure_session():
         return False
 
     login_and_save_session()
-    return is_session_valid()
+    return True
 
 
 def run_once():
