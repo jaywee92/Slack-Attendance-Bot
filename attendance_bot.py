@@ -3,6 +3,7 @@ from dotenv import load_dotenv
 import time
 import os
 import logging
+from urllib.parse import urlparse
 
 # Slack workspace and channel identifiers
 TEAM_ID = "TNS9HAY6M"
@@ -140,8 +141,22 @@ def is_signin_url(url):
     return "signin" in value or "sign_in" in value or "workspace-signin" in value
 
 
+def get_url_host(url):
+    try:
+        return urlparse(url or "").netloc.lower()
+    except Exception:
+        return ""
+
+
+def is_expected_slack_host(url):
+    host = get_url_host(url)
+    return host in {"app.slack.com", WORKSPACE_DOMAIN.lower()}
+
+
 def is_authenticated_client_url(url):
     value = (url or "").lower()
+    if not is_expected_slack_host(url):
+        return False
     client_target = f"/client/{TEAM_ID.lower()}/{CHANNEL_ID.lower()}"
     workspace_archive_target = f"{WORKSPACE_DOMAIN.lower()}/archives/{CHANNEL_ID.lower()}"
     return (
@@ -292,6 +307,11 @@ def wait_for_authenticated_client(page, timeout_s=60):
     while time.time() < deadline:
         goto_channel(page, timeout_ms=15000)
 
+        if is_glitch_page(page):
+            log_state("GLITCH_PAGE_DETECTED", page.url)
+            page.wait_for_timeout(1500)
+            continue
+
         if is_authenticated_client_url(page.url):
             return True
 
@@ -311,6 +331,26 @@ def log_state(state, detail=""):
         logger.info("STATE=%s | %s", state, detail)
     else:
         logger.info("STATE=%s", state)
+
+
+def is_glitch_page(page):
+    try:
+        title_text = (page.title() or "").lower()
+    except Exception:
+        title_text = ""
+
+    if "there's been a glitch" in title_text or "there’s been a glitch" in title_text:
+        return True
+
+    try:
+        body_text = page.locator("body").inner_text(timeout=1500).lower()
+    except Exception:
+        return False
+
+    return (
+        "there's been a glitch" in body_text
+        or "there’s been a glitch" in body_text
+    )
 
 
 def find_closed_survey_message(page):
@@ -418,6 +458,10 @@ def wait_for_channel_content(page, timeout_s=45):
 
         if has_channel_markers(page):
             return True
+
+        if is_glitch_page(page):
+            log_state("CHANNEL_GLITCH_PAGE", page.url)
+            return False
 
         if is_signin_url(page.url):
             log_state("WORKSPACE_SIGNIN_DETECTED", page.url)
@@ -596,9 +640,9 @@ def login_and_save_session():
                 logger.warning("Saved login debug screenshot to %s", screenshot_path)
             except Exception:
                 pass
-            logger.warning(
-                "STATE=LOGIN_AUTHENTICATED_NOT_CONFIRMED | Saving session anyway"
-            )
+            logger.error("STATE=LOGIN_AUTHENTICATED_NOT_CONFIRMED")
+            close_context(browser, context)
+            raise RuntimeError("Login not confirmed; refusing to save invalid session")
 
         # Save session cookies and storage for later reuse
         context.storage_state(path=SESSION_FILE)
@@ -630,6 +674,10 @@ def is_session_valid():
                 log_state("SESSION_INVALID_SIGNIN_URL", page.url)
                 return False
 
+            if is_glitch_page(page):
+                log_state("SESSION_INVALID_GLITCH_PAGE", page.url)
+                return False
+
             # Prefer channel-content markers, but accept slow Slack UI when URL stays authenticated.
             if has_channel_markers(page):
                 return True
@@ -639,6 +687,9 @@ def is_session_valid():
                 dismiss_cookie_or_privacy_overlays(page)
                 if is_signin_url(page.url):
                     log_state("SESSION_REAUTH_REQUIRED", page.url)
+                    return False
+                if is_glitch_page(page):
+                    log_state("SESSION_INVALID_GLITCH_PAGE", page.url)
                     return False
                 if has_channel_markers(page):
                     return True
@@ -696,6 +747,12 @@ def mark_present():
             logger.error("STATE=SESSION_REAUTH_REQUIRED | %s", page.url)
             close_context(browser, context)
             return "SESSION_REAUTH_REQUIRED"
+
+        if not channel_ready and is_glitch_page(page):
+            logger.error("STATE=CHANNEL_GLITCH_PAGE | %s", page.url)
+            capture_debug_artifacts(page)
+            close_context(browser, context)
+            return "CHANNEL_GLITCH_PAGE"
 
         if not channel_ready:
             logger.warning(
@@ -805,18 +862,18 @@ def ensure_session():
         )
         return False
 
-    login_and_save_session()
+    try:
+        login_and_save_session()
+    except Exception as exc:
+        logger.error("STATE=LOGIN_FAILED | %s", exc)
+        return False
+
     if is_session_valid():
         log_state("SESSION_VALID_AFTER_LOGIN")
         return True
 
-    # In some headless VPS environments Slack channel markers are delayed.
-    # Proceed to attendance attempt and let mark_present handle hard reauth errors.
-    logger.warning(
-        "STATE=SESSION_VALIDATION_SOFT_FAIL_AFTER_LOGIN | "
-        "Proceeding with attendance attempt."
-    )
-    return True
+    logger.error("STATE=SESSION_INVALID_AFTER_LOGIN")
+    return False
 
 
 def run_once():
