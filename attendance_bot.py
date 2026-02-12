@@ -7,13 +7,11 @@ import os
 TEAM_ID = "TNS9HAY6M"
 CHANNEL_ID = "C09BXD87H54"
 
-# Where the Slack session is stored
-SESSION_FILE = "slack_auth.json"
-
 # Load credentials from .env file
 load_dotenv()
 EMAIL = os.getenv("SLACK_EMAIL")
 PASSWORD = os.getenv("SLACK_PASSWORD")
+SESSION_FILE = os.getenv("SESSION_FILE", "slack_auth.json")
 
 
 def parse_bool(value, default=False):
@@ -22,6 +20,51 @@ def parse_bool(value, default=False):
     return value.strip().lower() in {"1", "true", "yes", "y", "on"}
 
 HEADLESS = parse_bool(os.getenv("HEADLESS"), default=False)
+ALLOW_INTERACTIVE_LOGIN = parse_bool(
+    os.getenv("ALLOW_INTERACTIVE_LOGIN"),
+    default=False,
+)
+
+
+def handle_security_code_challenge(page):
+    # Detect common OTP/code inputs shown after Slack sign-in.
+    code_fields = page.locator(
+        'input[autocomplete="one-time-code"], '
+        'input[inputmode="numeric"], '
+        'input[name*="code"], '
+        'input[id*="code"]'
+    )
+
+    if code_fields.count() == 0:
+        return
+
+    if not ALLOW_INTERACTIVE_LOGIN:
+        raise RuntimeError(
+            "Security code required, but ALLOW_INTERACTIVE_LOGIN is false"
+        )
+
+    if not os.isatty(0):
+        raise RuntimeError(
+            "Security code required, but stdin is not interactive. "
+            "Run container with -it for bootstrap runs."
+        )
+
+    secure_code = input("Enter Slack security code: ").strip()
+    if not secure_code:
+        raise RuntimeError("Security code was empty")
+
+    field_count = code_fields.count()
+    if field_count == 1:
+        code_fields.first.fill(secure_code)
+    elif len(secure_code) == field_count:
+        for idx, char in enumerate(secure_code):
+            code_fields.nth(idx).fill(char)
+    else:
+        # Fallback: many OTP UIs support pasting the full code into first field.
+        code_fields.first.fill(secure_code)
+
+    page.keyboard.press("Enter")
+    page.wait_for_timeout(3000)
 
 
 def login_and_save_session():
@@ -29,7 +72,7 @@ def login_and_save_session():
     print("🔐 No session found - logging into Slack")
 
     with sync_playwright() as p:
-        # Launch a visible browser so login works reliably
+        # Headless mode is controlled through the HEADLESS env variable.
         browser = p.chromium.launch(headless=HEADLESS)
 
         # Create a fresh browser context (clean session)
@@ -46,6 +89,10 @@ def login_and_save_session():
         # Click the login button
         page.wait_for_selector('button[type="submit"]', state="visible")
         page.click('[data-qa="signin_button"]')
+
+        # Some Slack logins require a one-time security code.
+        page.wait_for_timeout(1500)
+        handle_security_code_challenge(page)
 
         # Force Slack Web Client after login
         page.wait_for_load_state("domcontentloaded")
@@ -163,16 +210,24 @@ def ensure_session():
     # Reuse valid session if possible, otherwise login again
     if is_session_valid():
         print("🔑 Existing Slack session found")
+        return True
+
+    if not ALLOW_INTERACTIVE_LOGIN:
+        print(
+            "❌ Session invalid and interactive login disabled. "
+            "Enable ALLOW_INTERACTIVE_LOGIN=true for a bootstrap run."
+        )
         return False
 
     login_and_save_session()
-    return True
+    return is_session_valid()
 
 
 def run_once():
     # Single run: ensure session exists, then mark attendance
     print("⏰ Attendance run started")
-    ensure_session()
+    if not ensure_session():
+        raise SystemExit(2)
     mark_present()
 
 

@@ -33,7 +33,9 @@ cp .env.example .env
 ```
 SLACK_EMAIL=you@example.com
 SLACK_PASSWORD=your_password
+SESSION_FILE=slack_auth.json
 HEADLESS=false
+ALLOW_INTERACTIVE_LOGIN=false
 ```
 
 5. Update the Slack IDs in `attendance_bot.py` if needed:
@@ -46,12 +48,30 @@ python attendance_bot.py
 ```
 
 ## How It Works
-Note: The script reads `HEADLESS` from `.env`. Use `HEADLESS=false` for the first successful run so you can see the browser. After that, set `HEADLESS=true` for fully headless execution.
+Note: The script reads `HEADLESS` and `ALLOW_INTERACTIVE_LOGIN` from `.env`.
 
-- On the first run, a visible browser window opens so you can log in.
+- `HEADLESS` controls whether Chromium runs with or without UI.
+- `ALLOW_INTERACTIVE_LOGIN=true` allows one-time login bootstrap when session is invalid.
 - A session is saved to `slack_auth.json`.
-- Subsequent runs use the stored session in headless mode.
-- If the session is invalid or expired, the bot re-authenticates.
+- Subsequent runs use the stored session.
+- If `ALLOW_INTERACTIVE_LOGIN=false` and session is invalid, the bot exits instead of trying login.
+
+## VPS / Docker Bootstrap (Secure Code)
+Use this flow on terminal-only hosts when Slack requires a one-time security code:
+1. Set `ALLOW_INTERACTIVE_LOGIN=true` in `.env`.
+2. Run the container interactively (`-it`) once so `input()` can prompt for the code.
+3. Enter the security code in the terminal prompt.
+4. Verify that `slack_auth.json` was created in your mounted persistent volume.
+5. Set `ALLOW_INTERACTIVE_LOGIN=false` for normal scheduled runs.
+
+Example bootstrap run:
+```bash
+docker run --rm -it \\
+  -v /opt/slack-attendance/session:/session \\
+  --env-file .env \\
+  -e SESSION_FILE=/session/slack_auth.json \\
+  your-image python attendance_bot.py
+```
 
 ## Scheduling
 Because the script is single-run, schedule it externally. Example configs are in `examples/`.
