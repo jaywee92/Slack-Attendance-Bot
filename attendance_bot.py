@@ -78,6 +78,56 @@ def wait_for_authenticated_client(page, timeout_s=60):
     return False
 
 
+def capture_debug_artifacts(page):
+    screenshot_path = os.getenv("ATTENDANCE_DEBUG_SCREENSHOT", "attendance_debug.png")
+    html_path = os.getenv("ATTENDANCE_DEBUG_HTML", "attendance_debug.html")
+
+    try:
+        page.screenshot(path=screenshot_path, full_page=True)
+        print(f"WARN: Saved attendance debug screenshot to {screenshot_path}")
+    except Exception:
+        pass
+
+    try:
+        with open(html_path, "w", encoding="utf-8") as file:
+            file.write(page.content())
+        print(f"WARN: Saved attendance debug HTML to {html_path}")
+    except Exception:
+        pass
+
+
+def find_present_option(page):
+    candidates = [
+        ("input-id", "check", page.locator('input[type="radio"][id*="-present-"]')),
+        ("input-value", "check", page.locator('input[type="radio"][value="present"]')),
+        (
+            "input-aria",
+            "check",
+            page.locator('input[type="radio"][aria-label*="present" i]'),
+        ),
+        ("role-radio", "click", page.locator('[role="radio"][aria-label*="present" i]')),
+        ("label-text", "click", page.locator('label:has-text("present")')),
+    ]
+
+    timeout_s = 25
+    start = time.time()
+    while time.time() - start < timeout_s:
+        for name, action, locator in candidates:
+            count = locator.count()
+            if count > 0:
+                print(f"DEBUG: matched present selector {name} ({count} elements)")
+                return action, locator, count
+
+        # Slack can lazily render message blocks; keep nudging to latest messages.
+        try:
+            page.keyboard.press("End")
+        except Exception:
+            pass
+        page.wait_for_timeout(1000)
+
+    return None, None, 0
+
+
 def handle_security_code_challenge(page):
     # Detect common OTP/code inputs shown after Slack sign-in.
     code_fields = page.locator(
@@ -215,18 +265,15 @@ def mark_present():
         # Slack can be slow to load
         time.sleep(20)
 
-        # Find all "present" radio buttons
-        present_radios = page.locator('input[type="radio"][id$="-present-0"]')
-
-        # If none are found, stop
-        count = present_radios.count()
+        action, present_options, count = find_present_option(page)
         if count == 0:
             print("❌ No present buttons found")
+            capture_debug_artifacts(page)
             browser.close()
             return
 
-        # Click the newest "present" option
-        newest_present = present_radios.nth(count - 1)
+        # Select the newest "present" option
+        newest_present = present_options.nth(count - 1)
         newest_present.scroll_into_view_if_needed()
 
         # Prepare confirmation message check (from the Mia Attendance Bot)
@@ -237,7 +284,16 @@ def mark_present():
         )
         previous_confirmations = confirmation_locator.count()
 
-        newest_present.check()
+        try:
+            if action == "check":
+                newest_present.check(timeout=5000)
+            else:
+                newest_present.click(timeout=5000)
+        except Exception:
+            if action == "check":
+                newest_present.check(force=True)
+            else:
+                newest_present.click(force=True)
 
         # Wait for the new confirmation message
         confirmed = False
