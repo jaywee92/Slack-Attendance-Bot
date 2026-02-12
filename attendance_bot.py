@@ -56,6 +56,9 @@ CHANNEL_URLS = [
     f"https://app.slack.com/client/{TEAM_ID}/{CHANNEL_ID}",
     f"https://{WORKSPACE_DOMAIN}/archives/{CHANNEL_ID}",
 ]
+WORKSPACE_SIGNIN_MAX_ATTEMPTS = int(os.getenv("WORKSPACE_SIGNIN_MAX_ATTEMPTS", "12"))
+WORKSPACE_CANDIDATES = [WORKSPACE_DOMAIN, WORKSPACE_SLUG]
+workspace_signin_attempts = 0
 
 
 def is_signin_url(url):
@@ -65,7 +68,10 @@ def is_signin_url(url):
 
 def is_authenticated_client_url(url):
     value = (url or "").lower()
-    return "app.slack.com/client" in value and not is_signin_url(value)
+    return (
+        ("app.slack.com/client" in value and not is_signin_url(value))
+        or (WORKSPACE_DOMAIN.lower() in value and "/archives/" in value and not is_signin_url(value))
+    )
 
 
 def click_auth_action_button(page):
@@ -87,9 +93,47 @@ def click_auth_action_button(page):
     return False
 
 
+def click_workspace_result_link(page):
+    selectors = [
+        f'a[href*="{WORKSPACE_DOMAIN}"]',
+        f'a[href*="{WORKSPACE_SLUG}.slack.com"]',
+        f'a:has-text("{WORKSPACE_SLUG}")',
+        'a[href*="/client/"]',
+        'a:has-text("Open")',
+        'a:has-text("Continue")',
+    ]
+
+    for selector in selectors:
+        link = page.locator(selector).first
+        try:
+            if link.count() > 0 and link.is_visible():
+                link.click(timeout=3000)
+                log_state("WORKSPACE_SIGNIN_LINK_CLICKED", selector)
+                page.wait_for_timeout(1500)
+                return True
+        except Exception:
+            continue
+    return False
+
+
 def handle_workspace_signin(page):
+    global workspace_signin_attempts
+
     if "workspace-signin" not in (page.url or "").lower():
         return False
+
+    if workspace_signin_attempts >= WORKSPACE_SIGNIN_MAX_ATTEMPTS:
+        logger.error(
+            "STATE=WORKSPACE_SIGNIN_MAX_ATTEMPTS_REACHED | %s",
+            WORKSPACE_SIGNIN_MAX_ATTEMPTS,
+        )
+        return False
+
+    workspace_signin_attempts += 1
+
+    # If Slack shows a workspace result list, prefer clicking a matching result.
+    if click_workspace_result_link(page):
+        return True
 
     field = page.locator(
         'input[name*="domain" i], '
@@ -103,19 +147,29 @@ def handle_workspace_signin(page):
     try:
         if field.count() == 0:
             return False
-        field.fill(WORKSPACE_SLUG)
+
         submit = page.locator(
             'button[type="submit"], '
             'button:has-text("Continue"), '
             'button:has-text("Next"), '
-            'button:has-text("Sign in")'
+            'button:has-text("Sign in"), '
+            'button:has-text("Find your workspace")'
         ).first
-        if submit.count() > 0 and submit.is_visible():
-            submit.click(timeout=3000)
-        elif not click_auth_action_button(page):
-            page.keyboard.press("Enter")
-        page.wait_for_timeout(1500)
-        log_state("WORKSPACE_SIGNIN_SUBMITTED", WORKSPACE_SLUG)
+
+        for candidate in WORKSPACE_CANDIDATES:
+            if not candidate:
+                continue
+            field.fill(candidate)
+            if submit.count() > 0 and submit.is_visible():
+                submit.click(timeout=3000)
+            elif not click_auth_action_button(page):
+                page.keyboard.press("Enter")
+            page.wait_for_timeout(1500)
+            log_state("WORKSPACE_SIGNIN_SUBMITTED", candidate)
+            if "workspace-signin" not in (page.url or "").lower():
+                return True
+
+        # Keep flow moving even if URL does not switch immediately.
         return True
     except Exception:
         return False
@@ -585,6 +639,9 @@ def ensure_session():
 
 
 def run_once():
+    global workspace_signin_attempts
+    workspace_signin_attempts = 0
+
     # Single run: ensure session exists, then mark attendance
     log_state("RUN_STARTED")
     if not ensure_session():

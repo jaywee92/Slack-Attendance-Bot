@@ -35,6 +35,7 @@ SLACK_EMAIL=you@example.com
 SLACK_PASSWORD=your_password
 WORKSPACE_DOMAIN=wbscodingschool.slack.com
 WORKSPACE_SLUG=wbscodingschool
+WORKSPACE_SIGNIN_MAX_ATTEMPTS=12
 SESSION_FILE=slack_auth.json
 HEADLESS=false
 ALLOW_INTERACTIVE_LOGIN=false
@@ -58,6 +59,7 @@ Note: The script reads `HEADLESS`, `ALLOW_INTERACTIVE_LOGIN`, `LOG_LEVEL`, and `
 - `ALLOW_INTERACTIVE_LOGIN=true` allows one-time login bootstrap when session is invalid.
 - `WORKSPACE_DOMAIN` points to your Slack workspace (e.g. `wbscodingschool.slack.com`).
 - `WORKSPACE_SLUG` is used when Slack shows the "Find your workspace" screen.
+- `WORKSPACE_SIGNIN_MAX_ATTEMPTS` limits workspace-signin retries before hard fail.
 - A session is saved to `slack_auth.json`.
 - Subsequent runs use the stored session.
 - If `ALLOW_INTERACTIVE_LOGIN=false` and session is invalid, the bot exits instead of trying login.
