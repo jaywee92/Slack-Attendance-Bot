@@ -121,6 +121,34 @@ def find_closed_survey_message(page):
     return None
 
 
+def nudge_to_latest_messages(page):
+    # Slack renders inside nested scroll containers; scroll all of them down.
+    try:
+        page.evaluate(
+            """() => {
+                const nodes = Array.from(document.querySelectorAll("*"));
+                for (const node of nodes) {
+                    if (node.scrollHeight > node.clientHeight) {
+                        node.scrollTop = node.scrollHeight;
+                    }
+                }
+                window.scrollTo(0, document.body.scrollHeight);
+            }"""
+        )
+    except Exception:
+        pass
+
+
+def get_latest_survey_root(page):
+    # Focus the latest survey card from Mia, if present.
+    survey_cards = page.locator('div[role="document"]', has_text="Please select an option")
+    card_count = survey_cards.count()
+    if card_count > 0:
+        logger.debug("Found survey cards: %s", card_count)
+        return survey_cards.nth(card_count - 1)
+    return page
+
+
 def capture_debug_artifacts(page):
     screenshot_path = os.getenv("ATTENDANCE_DEBUG_SCREENSHOT", "attendance_debug.png")
     html_path = os.getenv("ATTENDANCE_DEBUG_HTML", "attendance_debug.html")
@@ -140,16 +168,17 @@ def capture_debug_artifacts(page):
 
 
 def find_present_option(page):
+    root = get_latest_survey_root(page)
+
     candidates = [
-        ("input-id", "check", page.locator('input[type="radio"][id*="-present-"]')),
-        ("input-value", "check", page.locator('input[type="radio"][value="present"]')),
-        (
-            "input-aria",
-            "check",
-            page.locator('input[type="radio"][aria-label*="present" i]'),
-        ),
-        ("role-radio", "click", page.locator('[role="radio"][aria-label*="present" i]')),
-        ("label-text", "click", page.locator('label:has-text("present")')),
+        ("role-radio-text", "click", root.locator('[role="radio"]:has-text("present")')),
+        ("role-radio-aria", "click", root.locator('[role="radio"][aria-label*="present" i]')),
+        ("button-text", "click", root.locator('button:has-text("present")')),
+        ("label-text", "click", root.locator('label:has-text("present")')),
+        ("input-id", "check", root.locator('input[type="radio"][id*="-present-"]')),
+        ("input-value", "check", root.locator('input[type="radio"][value="present"]')),
+        ("input-aria", "check", root.locator('input[type="radio"][aria-label*="present" i]')),
+        ("text-exact", "click", root.get_by_text("present", exact=True)),
     ]
 
     timeout_s = 25
@@ -162,6 +191,7 @@ def find_present_option(page):
                 return action, locator, count
 
         # Slack can lazily render message blocks; keep nudging to latest messages.
+        nudge_to_latest_messages(page)
         try:
             page.keyboard.press("End")
         except Exception:
