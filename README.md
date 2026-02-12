@@ -36,6 +36,8 @@ SLACK_PASSWORD=your_password
 SESSION_FILE=slack_auth.json
 HEADLESS=false
 ALLOW_INTERACTIVE_LOGIN=false
+LOG_LEVEL=INFO
+LOG_FILE=
 ```
 
 5. Update the Slack IDs in `attendance_bot.py` if needed:
@@ -48,13 +50,37 @@ python attendance_bot.py
 ```
 
 ## How It Works
-Note: The script reads `HEADLESS` and `ALLOW_INTERACTIVE_LOGIN` from `.env`.
+Note: The script reads `HEADLESS`, `ALLOW_INTERACTIVE_LOGIN`, `LOG_LEVEL`, and `LOG_FILE` from `.env`.
 
 - `HEADLESS` controls whether Chromium runs with or without UI.
 - `ALLOW_INTERACTIVE_LOGIN=true` allows one-time login bootstrap when session is invalid.
 - A session is saved to `slack_auth.json`.
 - Subsequent runs use the stored session.
 - If `ALLOW_INTERACTIVE_LOGIN=false` and session is invalid, the bot exits instead of trying login.
+
+## Bot State Logging
+The bot logs structured state lines in this format:
+`STATE=<STATE_NAME> | <DETAIL>`
+
+Important states:
+- `RUN_STARTED`
+- `SESSION_VALID`
+- `LOGIN_REQUIRED`
+- `SECURITY_CODE_REQUIRED`
+- `SESSION_SAVED`
+- `ATTENDANCE_ATTEMPT_STARTED`
+- `PRESENT_RECORDED`
+- `SURVEY_CLOSED`
+- `RUN_COMPLETED`
+- `RUN_FAILED`
+
+Closed survey is detected from Slack messages like:
+- `The survey is now closed. Further changes to your selections will not be recorded...`
+- `The survey is closed! If you missed it due to an absence and want to submit a sick note, please click the button.`
+
+Logging options:
+- `LOG_LEVEL=INFO` (or `DEBUG`)
+- `LOG_FILE=/session/attendance_bot.log` to write logs to a file in addition to stdout
 
 ## VPS / Docker Bootstrap (Secure Code)
 Use this flow on terminal-only hosts when Slack requires a one-time security code:

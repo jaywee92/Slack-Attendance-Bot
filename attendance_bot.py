@@ -2,6 +2,7 @@ from playwright.sync_api import sync_playwright
 from dotenv import load_dotenv
 import time
 import os
+import logging
 
 # Slack workspace and channel identifiers
 TEAM_ID = "TNS9HAY6M"
@@ -12,6 +13,25 @@ load_dotenv()
 EMAIL = os.getenv("SLACK_EMAIL")
 PASSWORD = os.getenv("SLACK_PASSWORD")
 SESSION_FILE = os.getenv("SESSION_FILE", "slack_auth.json")
+LOG_FILE = os.getenv("LOG_FILE")
+LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO").upper()
+
+
+def setup_logger():
+    handlers = [logging.StreamHandler()]
+    if LOG_FILE:
+        handlers.append(logging.FileHandler(LOG_FILE, encoding="utf-8"))
+
+    logging.basicConfig(
+        level=getattr(logging, LOG_LEVEL, logging.INFO),
+        format="%(asctime)s | %(levelname)s | %(message)s",
+        handlers=handlers,
+        force=True,
+    )
+
+
+setup_logger()
+logger = logging.getLogger("attendance_bot")
 
 
 def parse_bool(value, default=False):
@@ -24,6 +44,11 @@ ALLOW_INTERACTIVE_LOGIN = parse_bool(
     os.getenv("ALLOW_INTERACTIVE_LOGIN"),
     default=False,
 )
+
+CLOSED_SURVEY_PATTERNS = [
+    "The survey is now closed.",
+    "The survey is closed!",
+]
 
 
 def is_signin_url(url):
@@ -78,20 +103,38 @@ def wait_for_authenticated_client(page, timeout_s=60):
     return False
 
 
+def log_state(state, detail=""):
+    if detail:
+        logger.info("STATE=%s | %s", state, detail)
+    else:
+        logger.info("STATE=%s", state)
+
+
+def find_closed_survey_message(page):
+    for pattern in CLOSED_SURVEY_PATTERNS:
+        locator = page.locator("div.p-rich_text_section", has_text=pattern)
+        if locator.count() > 0:
+            try:
+                return locator.first.inner_text().strip()
+            except Exception:
+                return pattern
+    return None
+
+
 def capture_debug_artifacts(page):
     screenshot_path = os.getenv("ATTENDANCE_DEBUG_SCREENSHOT", "attendance_debug.png")
     html_path = os.getenv("ATTENDANCE_DEBUG_HTML", "attendance_debug.html")
 
     try:
         page.screenshot(path=screenshot_path, full_page=True)
-        print(f"WARN: Saved attendance debug screenshot to {screenshot_path}")
+        logger.warning("Saved attendance debug screenshot to %s", screenshot_path)
     except Exception:
         pass
 
     try:
         with open(html_path, "w", encoding="utf-8") as file:
             file.write(page.content())
-        print(f"WARN: Saved attendance debug HTML to {html_path}")
+        logger.warning("Saved attendance debug HTML to %s", html_path)
     except Exception:
         pass
 
@@ -115,7 +158,7 @@ def find_present_option(page):
         for name, action, locator in candidates:
             count = locator.count()
             if count > 0:
-                print(f"DEBUG: matched present selector {name} ({count} elements)")
+                logger.debug("Matched present selector %s (%s elements)", name, count)
                 return action, locator, count
 
         # Slack can lazily render message blocks; keep nudging to latest messages.
@@ -139,6 +182,8 @@ def handle_security_code_challenge(page):
 
     if code_fields.count() == 0:
         return
+
+    log_state("SECURITY_CODE_REQUIRED")
 
     if not ALLOW_INTERACTIVE_LOGIN:
         raise RuntimeError(
@@ -172,7 +217,7 @@ def handle_security_code_challenge(page):
 
 def login_and_save_session():
     # Log into Slack and store session cookies locally
-    print("🔐 No session found - logging into Slack")
+    log_state("LOGIN_REQUIRED", "No valid session found")
 
     with sync_playwright() as p:
         # Headless mode is controlled through the HEADLESS env variable.
@@ -202,14 +247,16 @@ def login_and_save_session():
             screenshot_path = os.getenv("LOGIN_DEBUG_SCREENSHOT", "login_failed.png")
             try:
                 page.screenshot(path=screenshot_path, full_page=True)
-                print(f"WARN: Saved login debug screenshot to {screenshot_path}")
+                logger.warning("Saved login debug screenshot to %s", screenshot_path)
             except Exception:
                 pass
             raise RuntimeError("Login did not complete; still on sign-in page")
 
+        log_state("LOGIN_AUTHENTICATED")
+
         # Save session cookies and storage for later reuse
         context.storage_state(path=SESSION_FILE)
-        print("✅ Slack session saved")
+        log_state("SESSION_SAVED", SESSION_FILE)
 
         browser.close()
 
@@ -242,7 +289,7 @@ def is_session_valid():
             return False
         except Exception as exc:
             # Any error -> treat as invalid session
-            print(f"WARN: Session validation failed, will re-login: {exc}")
+            logger.warning("Session validation failed, will re-login: %s", exc)
             return False
         finally:
             browser.close()
@@ -250,7 +297,7 @@ def is_session_valid():
 
 def mark_present():
     # Open the channel and click the newest "present" radio button
-    print("🟢 Marking attendance as PRESENT")
+    log_state("ATTENDANCE_ATTEMPT_STARTED")
 
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=HEADLESS)
@@ -265,12 +312,24 @@ def mark_present():
         # Slack can be slow to load
         time.sleep(20)
 
+        closed_message = find_closed_survey_message(page)
+        if closed_message:
+            log_state("SURVEY_CLOSED", closed_message)
+            browser.close()
+            return "SURVEY_CLOSED"
+
         action, present_options, count = find_present_option(page)
         if count == 0:
-            print("❌ No present buttons found")
+            closed_message = find_closed_survey_message(page)
+            if closed_message:
+                log_state("SURVEY_CLOSED", closed_message)
+                browser.close()
+                return "SURVEY_CLOSED"
+
+            logger.error("STATE=PRESENT_OPTION_NOT_FOUND")
             capture_debug_artifacts(page)
             browser.close()
-            return
+            return "PRESENT_OPTION_NOT_FOUND"
 
         # Select the newest "present" option
         newest_present = present_options.nth(count - 1)
@@ -306,24 +365,35 @@ def mark_present():
             time.sleep(0.5)
 
         if confirmed:
-            print("✅ Attendance recorded: confirmation message detected")
-        else:
-            print("⚠️ Attendance clicked, but confirmation message not found")
+            log_state("PRESENT_RECORDED", confirmation_text)
+            # Small delay to ensure the click is registered
+            time.sleep(3)
+            browser.close()
+            return "PRESENT_RECORDED"
 
+        closed_message = find_closed_survey_message(page)
+        if closed_message:
+            log_state("SURVEY_CLOSED_AFTER_ATTEMPT", closed_message)
+            browser.close()
+            return "SURVEY_CLOSED"
+
+        logger.warning("STATE=NO_CONFIRMATION_AFTER_CLICK")
+        capture_debug_artifacts(page)
         # Small delay to ensure the click is registered
         time.sleep(3)
         browser.close()
+        return "NO_CONFIRMATION_AFTER_CLICK"
 
 
 def ensure_session():
     # Reuse valid session if possible, otherwise login again
     if is_session_valid():
-        print("🔑 Existing Slack session found")
+        log_state("SESSION_VALID")
         return True
 
     if not ALLOW_INTERACTIVE_LOGIN:
-        print(
-            "❌ Session invalid and interactive login disabled. "
+        logger.error(
+            "STATE=SESSION_INVALID_INTERACTIVE_LOGIN_DISABLED | "
             "Enable ALLOW_INTERACTIVE_LOGIN=true for a bootstrap run."
         )
         return False
@@ -334,10 +404,18 @@ def ensure_session():
 
 def run_once():
     # Single run: ensure session exists, then mark attendance
-    print("⏰ Attendance run started")
+    log_state("RUN_STARTED")
     if not ensure_session():
+        log_state("RUN_FAILED", "No valid session")
         raise SystemExit(2)
-    mark_present()
+    attendance_state = mark_present()
+
+    if attendance_state in {"PRESENT_RECORDED", "SURVEY_CLOSED"}:
+        log_state("RUN_COMPLETED", attendance_state)
+        return
+
+    log_state("RUN_FAILED", attendance_state)
+    raise SystemExit(3)
 
 
 if __name__ == "__main__":
