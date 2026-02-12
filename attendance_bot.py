@@ -73,10 +73,8 @@ if WORKSPACE_SLUG.endswith(".slack.com"):
     WORKSPACE_SLUG = WORKSPACE_SLUG[: -len(".slack.com")]
 
 WORKSPACE_ARCHIVE_URL = f"https://{WORKSPACE_DOMAIN}/archives/{CHANNEL_ID}"
-APP_CHANNEL_URL = f"https://app.slack.com/client/{TEAM_ID}/{CHANNEL_ID}"
 CHANNEL_URLS = [
     WORKSPACE_ARCHIVE_URL,
-    APP_CHANNEL_URL,
 ]
 CHANNEL_CONTENT_MARKERS = [
     '[data-qa="message_pane"]',
@@ -98,6 +96,7 @@ WORKSPACE_CANDIDATES = unique_nonempty(
 )
 workspace_signin_attempts = 0
 FIND_PRESENT_TIMEOUT_S = int(os.getenv("FIND_PRESENT_TIMEOUT_S", "45"))
+AUTH_STABLE_SECONDS = int(os.getenv("AUTH_STABLE_SECONDS", "8"))
 
 
 def use_persistent_profile():
@@ -259,6 +258,7 @@ def handle_workspace_signin(page):
         'input[id*="domain" i], '
         'input[data-qa*="workspace" i], '
         'input[placeholder*="workspace" i], '
+        'input[type="email"], '
         'input[type="url"], '
         'input[type="text"]'
     ).first
@@ -317,13 +317,19 @@ def wait_for_authenticated_client(page, timeout_s=60):
     while time.time() < deadline:
         goto_channel(page, timeout_ms=15000)
 
+        if wait_for_stable_authenticated_url(page, timeout_s=12):
+            return True
+
         if is_glitch_page(page):
             log_state("GLITCH_PAGE_DETECTED", page.url)
             page.wait_for_timeout(1500)
             continue
 
-        if is_authenticated_client_url(page.url):
-            return True
+        if is_signin_url(page.url):
+            log_state("WORKSPACE_SIGNIN_DETECTED", page.url)
+            if handle_workspace_signin(page):
+                page.wait_for_timeout(1500)
+                continue
 
         handle_workspace_signin(page)
         if not click_auth_action_button(page):
@@ -341,6 +347,27 @@ def log_state(state, detail=""):
         logger.info("STATE=%s | %s", state, detail)
     else:
         logger.info("STATE=%s", state)
+
+
+def wait_for_stable_authenticated_url(page, timeout_s=20):
+    deadline = time.time() + timeout_s
+    stable_start = None
+
+    while time.time() < deadline:
+        if is_signin_url(page.url) or is_glitch_page(page):
+            return False
+
+        if is_authenticated_client_url(page.url):
+            if stable_start is None:
+                stable_start = time.time()
+            if time.time() - stable_start >= AUTH_STABLE_SECONDS:
+                return True
+        else:
+            stable_start = None
+
+        page.wait_for_timeout(1000)
+
+    return False
 
 
 def is_glitch_page(page):
@@ -681,8 +708,12 @@ def is_session_valid():
             page.wait_for_load_state("domcontentloaded")
 
             if is_signin_url(page.url):
-                log_state("SESSION_INVALID_SIGNIN_URL", page.url)
-                return False
+                log_state("WORKSPACE_SIGNIN_DETECTED", page.url)
+                if handle_workspace_signin(page):
+                    page.wait_for_timeout(1500)
+                else:
+                    log_state("SESSION_INVALID_SIGNIN_URL", page.url)
+                    return False
 
             if is_glitch_page(page):
                 log_state("SESSION_INVALID_GLITCH_PAGE", page.url)
@@ -696,6 +727,10 @@ def is_session_valid():
             while time.time() < deadline:
                 dismiss_cookie_or_privacy_overlays(page)
                 if is_signin_url(page.url):
+                    log_state("WORKSPACE_SIGNIN_DETECTED", page.url)
+                    if handle_workspace_signin(page):
+                        page.wait_for_timeout(1500)
+                        continue
                     log_state("SESSION_REAUTH_REQUIRED", page.url)
                     return False
                 if is_glitch_page(page):
