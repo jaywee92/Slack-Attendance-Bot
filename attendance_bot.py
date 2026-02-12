@@ -26,6 +26,58 @@ ALLOW_INTERACTIVE_LOGIN = parse_bool(
 )
 
 
+def is_signin_url(url):
+    value = (url or "").lower()
+    return "signin" in value or "sign_in" in value
+
+
+def is_authenticated_client_url(url):
+    value = (url or "").lower()
+    return "app.slack.com/client" in value and not is_signin_url(value)
+
+
+def click_auth_action_button(page):
+    selectors = [
+        'button[type="submit"]',
+        '[data-qa="signin_button"]',
+        'button:has-text("Continue")',
+        'button:has-text("Verify")',
+        'button:has-text("Submit")',
+    ]
+    for selector in selectors:
+        button = page.locator(selector).first
+        try:
+            if button.count() > 0 and button.is_visible() and button.is_enabled():
+                button.click()
+                return True
+        except Exception:
+            continue
+    return False
+
+
+def wait_for_authenticated_client(page, timeout_s=60):
+    target_url = f"https://app.slack.com/client/{TEAM_ID}/{CHANNEL_ID}"
+    deadline = time.time() + timeout_s
+
+    while time.time() < deadline:
+        try:
+            page.goto(target_url, wait_until="domcontentloaded", timeout=15000)
+        except Exception:
+            pass
+
+        if is_authenticated_client_url(page.url):
+            return True
+
+        if not click_auth_action_button(page):
+            try:
+                page.keyboard.press("Enter")
+            except Exception:
+                pass
+        page.wait_for_timeout(2000)
+
+    return False
+
+
 def handle_security_code_challenge(page):
     # Detect common OTP/code inputs shown after Slack sign-in.
     code_fields = page.locator(
@@ -63,7 +115,8 @@ def handle_security_code_challenge(page):
         # Fallback: many OTP UIs support pasting the full code into first field.
         code_fields.first.fill(secure_code)
 
-    page.keyboard.press("Enter")
+    if not click_auth_action_button(page):
+        page.keyboard.press("Enter")
     page.wait_for_timeout(3000)
 
 
@@ -94,12 +147,14 @@ def login_and_save_session():
         page.wait_for_timeout(1500)
         handle_security_code_challenge(page)
 
-        # Validate login on the target workspace/channel before saving session.
-        page.wait_for_load_state("domcontentloaded")
-        page.goto(f"https://app.slack.com/client/{TEAM_ID}/{CHANNEL_ID}")
-        page.wait_for_timeout(8000)
-        current_url = page.url.lower()
-        if "signin" in current_url or "sign_in" in current_url:
+        # Validate login on target workspace/channel before saving session.
+        if not wait_for_authenticated_client(page, timeout_s=90):
+            screenshot_path = os.getenv("LOGIN_DEBUG_SCREENSHOT", "login_failed.png")
+            try:
+                page.screenshot(path=screenshot_path, full_page=True)
+                print(f"WARN: Saved login debug screenshot to {screenshot_path}")
+            except Exception:
+                pass
             raise RuntimeError("Login did not complete; still on sign-in page")
 
         # Save session cookies and storage for later reuse
@@ -126,14 +181,15 @@ def is_session_valid():
             # Open target workspace/channel to verify login.
             page.goto(f"https://app.slack.com/client/{TEAM_ID}/{CHANNEL_ID}")
             page.wait_for_load_state("domcontentloaded")
-            page.wait_for_timeout(8000)
 
-            # If Slack redirects to login, session is invalid
-            current_url = page.url.lower()
-            if "signin" in current_url or "sign_in" in current_url:
-                return False
+            timeout_s = 25
+            start = time.time()
+            while time.time() - start < timeout_s:
+                if is_authenticated_client_url(page.url):
+                    return True
+                page.wait_for_timeout(1000)
 
-            return True
+            return False
         except Exception as exc:
             # Any error -> treat as invalid session
             print(f"WARN: Session validation failed, will re-login: {exc}")
