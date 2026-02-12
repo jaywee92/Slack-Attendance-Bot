@@ -43,6 +43,15 @@ def parse_bool(value, default=False):
     return value.strip().lower() in {"1", "true", "yes", "y", "on"}
 
 
+def parse_int(value, default=0):
+    if value is None:
+        return default
+    try:
+        return int(str(value).strip())
+    except Exception:
+        return default
+
+
 def unique_nonempty(values):
     seen = set()
     result = []
@@ -97,6 +106,8 @@ WORKSPACE_CANDIDATES = unique_nonempty(
 workspace_signin_attempts = 0
 FIND_PRESENT_TIMEOUT_S = int(os.getenv("FIND_PRESENT_TIMEOUT_S", "45"))
 AUTH_STABLE_SECONDS = int(os.getenv("AUTH_STABLE_SECONDS", "8"))
+SLOW_MO_MS = parse_int(os.getenv("SLOW_MO_MS"), default=0)
+DEBUG_NAV_EVENTS = parse_bool(os.getenv("DEBUG_NAV_EVENTS"), default=False)
 
 
 def use_persistent_profile():
@@ -109,10 +120,14 @@ def launch_context(playwright, use_saved_state=True):
         context = playwright.chromium.launch_persistent_context(
             user_data_dir=BROWSER_PROFILE_DIR,
             headless=HEADLESS,
+            slow_mo=SLOW_MO_MS,
         )
         return None, context
 
-    browser = playwright.chromium.launch(headless=HEADLESS)
+    browser = playwright.chromium.launch(
+        headless=HEADLESS,
+        slow_mo=SLOW_MO_MS,
+    )
     if (
         use_saved_state
         and os.path.exists(SESSION_FILE)
@@ -347,6 +362,29 @@ def log_state(state, detail=""):
         logger.info("STATE=%s | %s", state, detail)
     else:
         logger.info("STATE=%s", state)
+
+
+def attach_page_debug_listeners(page, label="page"):
+    if not DEBUG_NAV_EVENTS:
+        return
+
+    def on_frame_navigated(frame):
+        try:
+            if frame == page.main_frame:
+                logger.debug("NAV[%s] -> %s", label, frame.url)
+        except Exception:
+            return
+
+    def on_console(msg):
+        try:
+            text = msg.text
+            if text:
+                logger.debug("CONSOLE[%s] %s", label, text)
+        except Exception:
+            return
+
+    page.on("framenavigated", on_frame_navigated)
+    page.on("console", on_console)
 
 
 def wait_for_stable_authenticated_url(page, timeout_s=20):
@@ -650,6 +688,7 @@ def login_and_save_session():
         # Create a fresh browser context for login.
         browser, context = launch_context(p, use_saved_state=False)
         page = context.new_page()
+        attach_page_debug_listeners(page, label="login")
 
         # Open Slack login page
         page.goto(f"https://{WORKSPACE_DOMAIN}/sign_in_with_password")
@@ -702,6 +741,7 @@ def is_session_valid():
         try:
             # Load stored session/profile
             page = context.new_page()
+            attach_page_debug_listeners(page, label="session-check")
 
             # Open target workspace/channel to verify login.
             goto_channel(page, timeout_ms=15000)
@@ -759,6 +799,7 @@ def mark_present():
         # Use stored session/profile so no login is needed
         browser, context = launch_context(p, use_saved_state=True)
         page = context.new_page()
+        attach_page_debug_listeners(page, label="attendance")
 
         # Open the Slack channel where the attendance form exists
         goto_channel(page, timeout_ms=15000)
@@ -927,6 +968,12 @@ def run_once():
 
     # Single run: ensure session exists, then mark attendance
     log_state("RUN_STARTED")
+    logger.info(
+        "STATE=RUNTIME_CONFIG | headless=%s slow_mo_ms=%s debug_nav_events=%s",
+        HEADLESS,
+        SLOW_MO_MS,
+        DEBUG_NAV_EVENTS,
+    )
     if not ensure_session():
         log_state("RUN_FAILED", "No valid session")
         raise SystemExit(2)
