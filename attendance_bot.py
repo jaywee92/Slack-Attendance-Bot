@@ -111,7 +111,16 @@ def log_state(state, detail=""):
 
 
 def find_closed_survey_message(page):
+    try:
+        body_text = page.locator("body").inner_text(timeout=2000)
+    except Exception:
+        body_text = ""
+
+    body_text_lower = body_text.lower()
     for pattern in CLOSED_SURVEY_PATTERNS:
+        if pattern.lower() in body_text_lower:
+            return pattern
+
         locator = page.locator("div.p-rich_text_section", has_text=pattern)
         if locator.count() > 0:
             try:
@@ -174,11 +183,17 @@ def find_present_option(page):
         ("role-radio-text", "click", root.locator('[role="radio"]:has-text("present")')),
         ("role-radio-aria", "click", root.locator('[role="radio"][aria-label*="present" i]')),
         ("button-text", "click", root.locator('button:has-text("present")')),
+        ("aria-any", "click", root.locator('[aria-label*="present" i]')),
         ("label-text", "click", root.locator('label:has-text("present")')),
         ("input-id", "check", root.locator('input[type="radio"][id*="-present-"]')),
         ("input-value", "check", root.locator('input[type="radio"][value="present"]')),
         ("input-aria", "check", root.locator('input[type="radio"][aria-label*="present" i]')),
         ("text-exact", "click", root.get_by_text("present", exact=True)),
+        (
+            "text-regex",
+            "click",
+            root.locator(':text-matches("^\\s*present\\s*$", "i")'),
+        ),
     ]
 
     timeout_s = 25
@@ -338,9 +353,30 @@ def mark_present():
 
         # Open the Slack channel where the attendance form exists
         page.goto(f"https://app.slack.com/client/{TEAM_ID}/{CHANNEL_ID}")
+        log_state("CHANNEL_OPENED", page.url)
 
         # Slack can be slow to load
         time.sleep(20)
+
+        # Try to wait for message pane to render before selector lookups.
+        try:
+            page.wait_for_selector(
+                '[data-qa="message_pane"], [data-qa="message_content"]',
+                timeout=20000,
+            )
+        except Exception:
+            logger.warning("Message pane selector did not appear within timeout")
+
+        try:
+            body_text = page.locator("body").inner_text(timeout=3000).lower()
+            prompt_present = "please select an option" in body_text
+            closed_present = "the survey is now closed." in body_text or "the survey is closed!" in body_text
+            log_state(
+                "SURVEY_TEXT_SCAN",
+                f"prompt_present={prompt_present} closed_present={closed_present}",
+            )
+        except Exception:
+            logger.warning("Failed to read body text for survey text scan")
 
         closed_message = find_closed_survey_message(page)
         if closed_message:
