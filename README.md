@@ -33,6 +33,8 @@ cp .env.example .env
 ```
 SLACK_EMAIL=you@example.com
 SLACK_PASSWORD=your_password
+WORKSPACE_DOMAIN=wbscodingschool.slack.com
+WORKSPACE_SLUG=wbscodingschool
 SESSION_FILE=slack_auth.json
 HEADLESS=false
 ALLOW_INTERACTIVE_LOGIN=false
@@ -54,6 +56,8 @@ Note: The script reads `HEADLESS`, `ALLOW_INTERACTIVE_LOGIN`, `LOG_LEVEL`, and `
 
 - `HEADLESS` controls whether Chromium runs with or without UI.
 - `ALLOW_INTERACTIVE_LOGIN=true` allows one-time login bootstrap when session is invalid.
+- `WORKSPACE_DOMAIN` points to your Slack workspace (e.g. `wbscodingschool.slack.com`).
+- `WORKSPACE_SLUG` is used when Slack shows the "Find your workspace" screen.
 - A session is saved to `slack_auth.json`.
 - Subsequent runs use the stored session.
 - If `ALLOW_INTERACTIVE_LOGIN=false` and session is invalid, the bot exits instead of trying login.

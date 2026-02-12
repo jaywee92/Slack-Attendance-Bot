@@ -13,6 +13,7 @@ load_dotenv()
 EMAIL = os.getenv("SLACK_EMAIL")
 PASSWORD = os.getenv("SLACK_PASSWORD")
 SESSION_FILE = os.getenv("SESSION_FILE", "slack_auth.json")
+WORKSPACE_DOMAIN = os.getenv("WORKSPACE_DOMAIN", "wbscodingschool.slack.com")
 LOG_FILE = os.getenv("LOG_FILE")
 LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO").upper()
 
@@ -50,15 +51,25 @@ CLOSED_SURVEY_PATTERNS = [
     "The survey is closed!",
 ]
 
+WORKSPACE_SLUG = os.getenv("WORKSPACE_SLUG", WORKSPACE_DOMAIN.split(".")[0])
+CHANNEL_URLS = [
+    f"https://{WORKSPACE_DOMAIN}/archives/{CHANNEL_ID}",
+    f"https://app.slack.com/client/{TEAM_ID}/{CHANNEL_ID}",
+]
+
 
 def is_signin_url(url):
     value = (url or "").lower()
-    return "signin" in value or "sign_in" in value
+    return "signin" in value or "sign_in" in value or "workspace-signin" in value
 
 
 def is_authenticated_client_url(url):
     value = (url or "").lower()
-    return "app.slack.com/client" in value and not is_signin_url(value)
+    workspace_target = f"{WORKSPACE_DOMAIN}/archives/{CHANNEL_ID}".lower()
+    return (
+        ("app.slack.com/client" in value and not is_signin_url(value))
+        or workspace_target in value
+    )
 
 
 def click_auth_action_button(page):
@@ -80,19 +91,51 @@ def click_auth_action_button(page):
     return False
 
 
+def handle_workspace_signin(page):
+    if "workspace-signin" not in (page.url or "").lower():
+        return False
+
+    field = page.locator(
+        'input[name*="domain" i], '
+        'input[id*="domain" i], '
+        'input[placeholder*="workspace" i], '
+        'input[type="text"]'
+    ).first
+
+    try:
+        if field.count() == 0:
+            return False
+        field.fill(WORKSPACE_SLUG)
+        if not click_auth_action_button(page):
+            page.keyboard.press("Enter")
+        page.wait_for_timeout(1500)
+        log_state("WORKSPACE_SIGNIN_SUBMITTED", WORKSPACE_SLUG)
+        return True
+    except Exception:
+        return False
+
+
+def goto_channel(page, timeout_ms=15000):
+    for url in CHANNEL_URLS:
+        try:
+            page.goto(url, wait_until="domcontentloaded", timeout=timeout_ms)
+            if is_authenticated_client_url(page.url):
+                return
+            handle_workspace_signin(page)
+        except Exception:
+            continue
+
+
 def wait_for_authenticated_client(page, timeout_s=60):
-    target_url = f"https://app.slack.com/client/{TEAM_ID}/{CHANNEL_ID}"
     deadline = time.time() + timeout_s
 
     while time.time() < deadline:
-        try:
-            page.goto(target_url, wait_until="domcontentloaded", timeout=15000)
-        except Exception:
-            pass
+        goto_channel(page, timeout_ms=15000)
 
         if is_authenticated_client_url(page.url):
             return True
 
+        handle_workspace_signin(page)
         if not click_auth_action_button(page):
             try:
                 page.keyboard.press("Enter")
@@ -327,7 +370,7 @@ def login_and_save_session():
         page = context.new_page()
 
         # Open Slack login page
-        page.goto("https://wbscodingschool.slack.com/sign_in_with_password")
+        page.goto(f"https://{WORKSPACE_DOMAIN}/sign_in_with_password")
 
         # Fill in email and password from .env
         page.fill('input[type="email"]', EMAIL)
@@ -375,7 +418,7 @@ def is_session_valid():
             page = context.new_page()
 
             # Open target workspace/channel to verify login.
-            page.goto(f"https://app.slack.com/client/{TEAM_ID}/{CHANNEL_ID}")
+            goto_channel(page, timeout_ms=15000)
             page.wait_for_load_state("domcontentloaded")
 
             timeout_s = 25
@@ -406,7 +449,7 @@ def mark_present():
         page = context.new_page()
 
         # Open the Slack channel where the attendance form exists
-        page.goto(f"https://app.slack.com/client/{TEAM_ID}/{CHANNEL_ID}")
+        goto_channel(page, timeout_ms=15000)
         log_state("CHANNEL_OPENED", page.url)
 
         # Slack can be slow to load
