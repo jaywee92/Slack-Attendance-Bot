@@ -79,6 +79,15 @@ CHANNEL_URLS = [
     WORKSPACE_ARCHIVE_URL,
     APP_CHANNEL_URL,
 ]
+CHANNEL_CONTENT_MARKERS = [
+    '[data-qa="message_pane"]',
+    '[data-qa="message_content"]',
+    "div.c-virtual_list__scroll_container",
+    "div.c-virtual_list",
+    '[data-qa="channel_header"]',
+    '[data-qa="slack_kit_list"]',
+    '[data-qa="slack_kit_list_container"]',
+]
 WORKSPACE_SIGNIN_MAX_ATTEMPTS = int(os.getenv("WORKSPACE_SIGNIN_MAX_ATTEMPTS", "12"))
 WORKSPACE_CANDIDATES = unique_nonempty(
     [
@@ -89,6 +98,7 @@ WORKSPACE_CANDIDATES = unique_nonempty(
     ]
 )
 workspace_signin_attempts = 0
+FIND_PRESENT_TIMEOUT_S = int(os.getenv("FIND_PRESENT_TIMEOUT_S", "45"))
 
 
 def use_persistent_profile():
@@ -378,23 +388,13 @@ def dismiss_cookie_or_privacy_overlays(page):
 
 
 def wait_for_channel_content(page, timeout_s=45):
-    markers = [
-        '[data-qa="message_pane"]',
-        '[data-qa="message_content"]',
-        "div.c-virtual_list__scroll_container",
-        '[data-qa="channel_header"]',
-    ]
     deadline = time.time() + timeout_s
 
     while time.time() < deadline:
         dismiss_cookie_or_privacy_overlays(page)
 
-        for selector in markers:
-            try:
-                if page.locator(selector).count() > 0:
-                    return True
-            except Exception:
-                continue
+        if has_channel_markers(page):
+            return True
 
         if is_signin_url(page.url):
             log_state("WORKSPACE_SIGNIN_DETECTED", page.url)
@@ -414,13 +414,7 @@ def wait_for_channel_content(page, timeout_s=45):
 
 
 def has_channel_markers(page):
-    markers = [
-        '[data-qa="message_pane"]',
-        '[data-qa="message_content"]',
-        "div.c-virtual_list__scroll_container",
-        '[data-qa="channel_header"]',
-    ]
-    for selector in markers:
+    for selector in CHANNEL_CONTENT_MARKERS:
         try:
             if page.locator(selector).count() > 0:
                 return True
@@ -467,7 +461,7 @@ def find_present_option(page):
         ),
     ]
 
-    timeout_s = 25
+    timeout_s = FIND_PRESENT_TIMEOUT_S
     start = time.time()
     while time.time() - start < timeout_s:
         for name, action, locator in candidates:
@@ -646,11 +640,31 @@ def mark_present():
         dismiss_cookie_or_privacy_overlays(page)
 
         # Try to wait for message pane to render before selector lookups.
-        if not wait_for_channel_content(page, timeout_s=45):
-            if is_signin_url(page.url):
-                logger.error("STATE=SESSION_REAUTH_REQUIRED | %s", page.url)
-                close_context(browser, context)
-                return "SESSION_REAUTH_REQUIRED"
+        channel_ready = wait_for_channel_content(page, timeout_s=45)
+        if not channel_ready and not is_signin_url(page.url):
+            logger.warning(
+                "Channel markers missing on /client URL, trying archive fallback | url=%s",
+                page.url,
+            )
+            try:
+                page.goto(
+                    WORKSPACE_ARCHIVE_URL,
+                    wait_until="domcontentloaded",
+                    timeout=20000,
+                )
+                log_state("CHANNEL_ARCHIVE_FALLBACK_OPENED", page.url)
+            except Exception as exc:
+                logger.warning("Archive fallback navigation failed: %s", exc)
+            time.sleep(8)
+            dismiss_cookie_or_privacy_overlays(page)
+            channel_ready = wait_for_channel_content(page, timeout_s=35)
+
+        if not channel_ready and is_signin_url(page.url):
+            logger.error("STATE=SESSION_REAUTH_REQUIRED | %s", page.url)
+            close_context(browser, context)
+            return "SESSION_REAUTH_REQUIRED"
+
+        if not channel_ready:
             logger.warning(
                 "Message pane selector did not appear within timeout | url=%s",
                 page.url,
@@ -659,10 +673,7 @@ def mark_present():
                 logger.warning("Page title while waiting: %s", page.title())
             except Exception:
                 pass
-            logger.error("STATE=CHANNEL_CONTENT_NOT_AVAILABLE")
-            capture_debug_artifacts(page)
-            close_context(browser, context)
-            return "CHANNEL_CONTENT_NOT_AVAILABLE"
+            log_state("CHANNEL_MARKERS_MISSING_CONTINUING", page.url)
 
         try:
             body_text = page.locator("body").inner_text(timeout=3000).lower()
