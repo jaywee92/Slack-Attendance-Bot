@@ -53,8 +53,8 @@ CLOSED_SURVEY_PATTERNS = [
 
 WORKSPACE_SLUG = os.getenv("WORKSPACE_SLUG", WORKSPACE_DOMAIN.split(".")[0])
 CHANNEL_URLS = [
-    f"https://{WORKSPACE_DOMAIN}/archives/{CHANNEL_ID}",
     f"https://app.slack.com/client/{TEAM_ID}/{CHANNEL_ID}",
+    f"https://{WORKSPACE_DOMAIN}/archives/{CHANNEL_ID}",
 ]
 
 
@@ -65,11 +65,7 @@ def is_signin_url(url):
 
 def is_authenticated_client_url(url):
     value = (url or "").lower()
-    workspace_target = f"{WORKSPACE_DOMAIN}/archives/{CHANNEL_ID}".lower()
-    return (
-        ("app.slack.com/client" in value and not is_signin_url(value))
-        or workspace_target in value
-    )
+    return "app.slack.com/client" in value and not is_signin_url(value)
 
 
 def click_auth_action_button(page):
@@ -98,7 +94,9 @@ def handle_workspace_signin(page):
     field = page.locator(
         'input[name*="domain" i], '
         'input[id*="domain" i], '
+        'input[data-qa*="workspace" i], '
         'input[placeholder*="workspace" i], '
+        'input[type="url"], '
         'input[type="text"]'
     ).first
 
@@ -106,7 +104,15 @@ def handle_workspace_signin(page):
         if field.count() == 0:
             return False
         field.fill(WORKSPACE_SLUG)
-        if not click_auth_action_button(page):
+        submit = page.locator(
+            'button[type="submit"], '
+            'button:has-text("Continue"), '
+            'button:has-text("Next"), '
+            'button:has-text("Sign in")'
+        ).first
+        if submit.count() > 0 and submit.is_visible():
+            submit.click(timeout=3000)
+        elif not click_auth_action_button(page):
             page.keyboard.press("Enter")
         page.wait_for_timeout(1500)
         log_state("WORKSPACE_SIGNIN_SUBMITTED", WORKSPACE_SLUG)
@@ -132,7 +138,7 @@ def wait_for_authenticated_client(page, timeout_s=60):
     while time.time() < deadline:
         goto_channel(page, timeout_ms=15000)
 
-        if is_authenticated_client_url(page.url):
+        if is_authenticated_client_url(page.url) and wait_for_channel_content(page, timeout_s=12):
             return True
 
         handle_workspace_signin(page)
