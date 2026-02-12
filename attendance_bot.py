@@ -94,12 +94,13 @@ def login_and_save_session():
         page.wait_for_timeout(1500)
         handle_security_code_challenge(page)
 
-        # Force Slack Web Client after login
+        # Validate login on the target workspace/channel before saving session.
         page.wait_for_load_state("domcontentloaded")
-        page.goto("https://app.slack.com/client")
-
-        # Give Slack time to fully load and set auth cookies
-        time.sleep(20)
+        page.goto(f"https://app.slack.com/client/{TEAM_ID}/{CHANNEL_ID}")
+        page.wait_for_timeout(8000)
+        current_url = page.url.lower()
+        if "signin" in current_url or "sign_in" in current_url:
+            raise RuntimeError("Login did not complete; still on sign-in page")
 
         # Save session cookies and storage for later reuse
         context.storage_state(path=SESSION_FILE)
@@ -122,18 +123,14 @@ def is_session_valid():
             context = browser.new_context(storage_state=SESSION_FILE)
             page = context.new_page()
 
-            # Open Slack client to verify login
-            page.goto("https://app.slack.com/client")
+            # Open target workspace/channel to verify login.
+            page.goto(f"https://app.slack.com/client/{TEAM_ID}/{CHANNEL_ID}")
             page.wait_for_load_state("domcontentloaded")
-            page.wait_for_timeout(5000)
+            page.wait_for_timeout(8000)
 
             # If Slack redirects to login, session is invalid
-            if "signin" in page.url or "sign_in" in page.url:
-                return False
-
-            # If login form appears, session is invalid
-            login_fields = page.locator('input[type="email"], input[type="password"]')
-            if login_fields.count() > 0:
+            current_url = page.url.lower()
+            if "signin" in current_url or "sign_in" in current_url:
                 return False
 
             return True
