@@ -41,6 +41,21 @@ def parse_bool(value, default=False):
         return default
     return value.strip().lower() in {"1", "true", "yes", "y", "on"}
 
+
+def unique_nonempty(values):
+    seen = set()
+    result = []
+    for value in values:
+        if value is None:
+            continue
+        item = str(value).strip()
+        if not item or item in seen:
+            continue
+        seen.add(item)
+        result.append(item)
+    return result
+
+
 HEADLESS = parse_bool(os.getenv("HEADLESS"), default=False)
 ALLOW_INTERACTIVE_LOGIN = parse_bool(
     os.getenv("ALLOW_INTERACTIVE_LOGIN"),
@@ -52,13 +67,27 @@ CLOSED_SURVEY_PATTERNS = [
     "The survey is closed!",
 ]
 
-WORKSPACE_SLUG = os.getenv("WORKSPACE_SLUG", WORKSPACE_DOMAIN.split(".")[0])
+WORKSPACE_SLUG = os.getenv("WORKSPACE_SLUG", WORKSPACE_DOMAIN.split(".")[0]).strip()
+if WORKSPACE_SLUG.endswith(".slack.com"):
+    WORKSPACE_SLUG = WORKSPACE_SLUG[: -len(".slack.com")]
+
+WORKSPACE_ARCHIVE_URL = f"https://{WORKSPACE_DOMAIN}/archives/{CHANNEL_ID}"
+WORKSPACE_CLIENT_URL = f"https://{WORKSPACE_DOMAIN}/client/{TEAM_ID}/{CHANNEL_ID}"
+APP_CHANNEL_URL = f"https://app.slack.com/client/{TEAM_ID}/{CHANNEL_ID}"
 CHANNEL_URLS = [
-    f"https://{WORKSPACE_DOMAIN}/archives/{CHANNEL_ID}",
-    f"https://app.slack.com/client/{TEAM_ID}/{CHANNEL_ID}",
+    WORKSPACE_CLIENT_URL,
+    WORKSPACE_ARCHIVE_URL,
+    APP_CHANNEL_URL,
 ]
 WORKSPACE_SIGNIN_MAX_ATTEMPTS = int(os.getenv("WORKSPACE_SIGNIN_MAX_ATTEMPTS", "12"))
-WORKSPACE_CANDIDATES = [WORKSPACE_SLUG]
+WORKSPACE_CANDIDATES = unique_nonempty(
+    [
+        WORKSPACE_SLUG,
+        f"{WORKSPACE_SLUG}.slack.com" if WORKSPACE_SLUG else "",
+        WORKSPACE_DOMAIN,
+        EMAIL,
+    ]
+)
 workspace_signin_attempts = 0
 
 
@@ -103,11 +132,11 @@ def is_signin_url(url):
 
 def is_authenticated_client_url(url):
     value = (url or "").lower()
-    app_target = f"app.slack.com/client/{TEAM_ID.lower()}/{CHANNEL_ID.lower()}"
-    workspace_target = f"{WORKSPACE_DOMAIN.lower()}/archives/{CHANNEL_ID.lower()}"
+    client_target = f"/client/{TEAM_ID.lower()}/{CHANNEL_ID.lower()}"
+    workspace_archive_target = f"{WORKSPACE_DOMAIN.lower()}/archives/{CHANNEL_ID.lower()}"
     return (
         not is_signin_url(value)
-        and (app_target in value or workspace_target in value)
+        and (client_target in value or workspace_archive_target in value)
     )
 
 
@@ -153,6 +182,27 @@ def click_workspace_result_link(page):
     return False
 
 
+def get_workspace_signin_candidates(field):
+    try:
+        attributes = " ".join(
+            [
+                field.get_attribute("type") or "",
+                field.get_attribute("name") or "",
+                field.get_attribute("id") or "",
+                field.get_attribute("placeholder") or "",
+                field.get_attribute("autocomplete") or "",
+            ]
+        ).lower()
+    except Exception:
+        attributes = ""
+
+    # "Find your workspace" often asks for account email instead of workspace slug.
+    if "email" in attributes:
+        return unique_nonempty([EMAIL])
+
+    return WORKSPACE_CANDIDATES
+
+
 def handle_workspace_signin(page):
     global workspace_signin_attempts
 
@@ -193,7 +243,11 @@ def handle_workspace_signin(page):
             'button:has-text("Find your workspace")'
         ).first
 
-        for candidate in WORKSPACE_CANDIDATES:
+        candidates = get_workspace_signin_candidates(field)
+        if not candidates:
+            return False
+
+        for candidate in candidates:
             if not candidate:
                 continue
             field.fill(candidate)
@@ -343,6 +397,10 @@ def wait_for_channel_content(page, timeout_s=45):
                 continue
 
         if is_signin_url(page.url):
+            log_state("WORKSPACE_SIGNIN_DETECTED", page.url)
+            if handle_workspace_signin(page):
+                page.wait_for_timeout(1500)
+                continue
             log_state("SESSION_REAUTH_REQUIRED", page.url)
             return False
 
@@ -461,6 +519,9 @@ def login_and_save_session():
     # Log into Slack and store session cookies locally
     log_state("LOGIN_REQUIRED", "No valid session found")
 
+    if not EMAIL or not PASSWORD:
+        raise RuntimeError("Missing SLACK_EMAIL or SLACK_PASSWORD in environment")
+
     with sync_playwright() as p:
         # Create a fresh browser context for login.
         browser, context = launch_context(p, use_saved_state=False)
@@ -523,6 +584,10 @@ def is_session_valid():
             page.wait_for_load_state("domcontentloaded")
 
             if is_signin_url(page.url):
+                return False
+
+            # Guard against delayed redirect back to workspace-signin.
+            if not wait_for_channel_content(page, timeout_s=20):
                 return False
 
             return True
