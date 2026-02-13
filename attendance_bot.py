@@ -209,6 +209,35 @@ def click_auth_action_button(page):
     return False
 
 
+def submit_password_login_if_visible(page):
+    # Some Slack flows redirect to workspace sign-in again after OTP.
+    email_field = page.locator(
+        'input[type="email"], input[name="email"], input[id*="email" i]'
+    ).first
+    password_field = page.locator(
+        'input[type="password"], input[name="password"], input[id*="password" i]'
+    ).first
+
+    try:
+        if email_field.count() == 0 or password_field.count() == 0:
+            return False
+
+        if not email_field.is_visible() or not password_field.is_visible():
+            return False
+
+        email_field.fill(EMAIL or "")
+        password_field.fill(PASSWORD or "")
+
+        if not click_auth_action_button(page):
+            page.keyboard.press("Enter")
+
+        page.wait_for_timeout(2000)
+        log_state("PASSWORD_LOGIN_SUBMITTED", page.url)
+        return True
+    except Exception:
+        return False
+
+
 def click_workspace_result_link(page):
     selectors = [
         f'a[href*="{WORKSPACE_DOMAIN}"]',
@@ -346,6 +375,9 @@ def wait_for_authenticated_client(page, timeout_s=60):
 
         if is_signin_url(page.url):
             log_state("WORKSPACE_SIGNIN_DETECTED", page.url)
+            if submit_password_login_if_visible(page):
+                page.wait_for_timeout(1500)
+                continue
             if handle_workspace_signin(page):
                 page.wait_for_timeout(1500)
                 continue
@@ -719,6 +751,20 @@ def login_and_save_session():
         # Some Slack logins require a one-time security code.
         page.wait_for_timeout(1500)
         handle_security_code_challenge(page)
+
+        # Slack can ask for password again on redirected workspace sign-in.
+        submit_password_login_if_visible(page)
+
+        # Force explicit workspace archive auth flow after OTP/login.
+        try:
+            page.goto(
+                f"https://{WORKSPACE_DOMAIN}/sign_in_with_password?redir=%2Farchives%2F{CHANNEL_ID}%3Fname%3D{CHANNEL_ID}",
+                wait_until="domcontentloaded",
+                timeout=20000,
+            )
+            submit_password_login_if_visible(page)
+        except Exception:
+            pass
 
         # Try to reach authenticated Slack client before saving session.
         authenticated = wait_for_authenticated_client(page, timeout_s=90)
