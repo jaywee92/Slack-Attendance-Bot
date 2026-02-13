@@ -83,6 +83,10 @@ if WORKSPACE_SLUG.endswith(".slack.com"):
 
 WORKSPACE_ARCHIVE_URL = f"https://{WORKSPACE_DOMAIN}/archives/{CHANNEL_ID}"
 APP_CHANNEL_URL = f"https://app.slack.com/client/{TEAM_ID}/{CHANNEL_ID}"
+WORKSPACE_SIGNIN_URL = (
+    f"https://{WORKSPACE_DOMAIN}/sign_in_with_password"
+    f"?redir=%2Farchives%2F{CHANNEL_ID}%3Fname%3D{CHANNEL_ID}"
+)
 CHANNEL_URLS = [
     APP_CHANNEL_URL,
     WORKSPACE_ARCHIVE_URL,
@@ -263,6 +267,29 @@ def click_workspace_result_link(page):
     return False
 
 
+def dismiss_open_app_prompt(page):
+    # Browser/app handoff prompts can block rendering of the web client.
+    selectors = [
+        'button:has-text("Use Slack in your browser")',
+        'button:has-text("Continue in browser")',
+        'button:has-text("Use in browser")',
+        'button:has-text("Not now")',
+        'button:has-text("Cancel")',
+        'a:has-text("Continue in browser")',
+    ]
+    for selector in selectors:
+        try:
+            btn = page.locator(selector).first
+            if btn.count() > 0 and btn.is_visible():
+                btn.click(timeout=3000)
+                log_state("APP_PROMPT_DISMISSED", selector)
+                page.wait_for_timeout(1000)
+                return True
+        except Exception:
+            continue
+    return False
+
+
 def get_workspace_signin_candidates(field):
     try:
         attributes = " ".join(
@@ -351,6 +378,7 @@ def goto_channel(page, timeout_ms=15000):
     for url in CHANNEL_URLS:
         try:
             page.goto(url, wait_until="domcontentloaded", timeout=timeout_ms)
+            dismiss_open_app_prompt(page)
             if is_glitch_page(page):
                 log_state("GLITCH_PAGE_DETECTED", page.url)
                 continue
@@ -754,38 +782,28 @@ def login_and_save_session():
         page = context.new_page()
         attach_page_debug_listeners(page, label="login")
 
-        # Open Slack login page
-        page.goto(f"https://{WORKSPACE_DOMAIN}/sign_in_with_password")
+        # 1) Always start at workspace password page with attendance-channel redirect.
+        page.goto(WORKSPACE_SIGNIN_URL, wait_until="domcontentloaded")
+        page.wait_for_timeout(1000)
+        submit_password_login_if_visible(page)
 
-        # Fill in email and password from .env
-        page.fill('input[type="email"]', EMAIL)
-        page.fill('input[type="password"]', PASSWORD)
-
-        # Click the login button
-        page.wait_for_selector('button[type="submit"]', state="visible")
-        page.click('[data-qa="signin_button"]')
-
-        # Some Slack logins require a one-time security code.
+        # 2) OTP challenge after password sign-in.
         page.wait_for_timeout(1500)
         handle_security_code_challenge(page)
 
-        # Slack can ask for password again on redirected workspace sign-in.
+        # Slack can ask for password again after OTP redirect.
         submit_password_login_if_visible(page)
 
-        # Force explicit workspace archive auth flow after OTP/login.
+        # 3) Ensure auth redirect is fully loaded.
         try:
-            page.goto(
-                f"https://{WORKSPACE_DOMAIN}/sign_in_with_password?redir=%2Farchives%2F{CHANNEL_ID}%3Fname%3D{CHANNEL_ID}",
-                wait_until="domcontentloaded",
-                timeout=20000,
-            )
-            submit_password_login_if_visible(page)
+            page.wait_for_load_state("networkidle", timeout=15000)
         except Exception:
             pass
 
-        # Continue in app client after successful authentication.
+        # 4) Switch to app client, ignore handoff popup, then continue to attendance channel.
         try:
             page.goto(APP_CHANNEL_URL, wait_until="domcontentloaded", timeout=20000)
+            dismiss_open_app_prompt(page)
         except Exception:
             pass
 
