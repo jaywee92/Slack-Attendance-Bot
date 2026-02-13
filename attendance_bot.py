@@ -709,15 +709,30 @@ def handle_security_code_challenge(page):
     if not secure_code:
         raise RuntimeError("Security code was empty")
 
-    field_count = code_fields.count()
-    if field_count == 1:
-        code_fields.first.fill(secure_code)
-    elif len(secure_code) == field_count:
-        for idx, char in enumerate(secure_code):
-            code_fields.nth(idx).fill(char)
+    visible_fields = []
+    for idx in range(code_fields.count()):
+        field = code_fields.nth(idx)
+        try:
+            if field.is_visible() and field.is_enabled():
+                visible_fields.append(field)
+        except Exception:
+            continue
+
+    # Slack sometimes renders 6 single-char OTP boxes. If we fill only one box
+    # with the whole code, Chromium keeps only the first digit.
+    if len(visible_fields) > 1 and len(secure_code) >= len(visible_fields):
+        for idx, field in enumerate(visible_fields):
+            if idx >= len(secure_code):
+                break
+            field.fill(secure_code[idx])
     else:
-        # Fallback: many OTP UIs support pasting the full code into first field.
-        code_fields.first.fill(secure_code)
+        target = visible_fields[0] if visible_fields else code_fields.first
+        target.click()
+        try:
+            target.fill("")
+        except Exception:
+            pass
+        page.keyboard.type(secure_code, delay=60)
 
     if not click_auth_action_button(page):
         page.keyboard.press("Enter")
