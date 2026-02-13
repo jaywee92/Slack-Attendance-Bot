@@ -108,6 +108,10 @@ FIND_PRESENT_TIMEOUT_S = int(os.getenv("FIND_PRESENT_TIMEOUT_S", "45"))
 AUTH_STABLE_SECONDS = int(os.getenv("AUTH_STABLE_SECONDS", "8"))
 SLOW_MO_MS = parse_int(os.getenv("SLOW_MO_MS"), default=0)
 DEBUG_NAV_EVENTS = parse_bool(os.getenv("DEBUG_NAV_EVENTS"), default=False)
+KEEP_BROWSER_OPEN_SECONDS = parse_int(
+    os.getenv("KEEP_BROWSER_OPEN_SECONDS"),
+    default=0,
+)
 
 
 def use_persistent_profile():
@@ -362,6 +366,17 @@ def log_state(state, detail=""):
         logger.info("STATE=%s | %s", state, detail)
     else:
         logger.info("STATE=%s", state)
+
+
+def maybe_pause_for_debug(reason):
+    if KEEP_BROWSER_OPEN_SECONDS <= 0:
+        return
+    logger.warning(
+        "STATE=DEBUG_PAUSE | reason=%s seconds=%s",
+        reason,
+        KEEP_BROWSER_OPEN_SECONDS,
+    )
+    time.sleep(KEEP_BROWSER_OPEN_SECONDS)
 
 
 def attach_page_debug_listeners(page, label="page"):
@@ -717,6 +732,7 @@ def login_and_save_session():
             except Exception:
                 pass
             logger.error("STATE=LOGIN_AUTHENTICATED_NOT_CONFIRMED")
+            maybe_pause_for_debug("LOGIN_AUTHENTICATED_NOT_CONFIRMED")
             close_context(browser, context)
             raise RuntimeError("Login not confirmed; refusing to save invalid session")
 
@@ -831,12 +847,14 @@ def mark_present():
 
         if not channel_ready and is_signin_url(page.url):
             logger.error("STATE=SESSION_REAUTH_REQUIRED | %s", page.url)
+            maybe_pause_for_debug("SESSION_REAUTH_REQUIRED")
             close_context(browser, context)
             return "SESSION_REAUTH_REQUIRED"
 
         if not channel_ready and is_glitch_page(page):
             logger.error("STATE=CHANNEL_GLITCH_PAGE | %s", page.url)
             capture_debug_artifacts(page)
+            maybe_pause_for_debug("CHANNEL_GLITCH_PAGE")
             close_context(browser, context)
             return "CHANNEL_GLITCH_PAGE"
 
@@ -873,11 +891,13 @@ def mark_present():
             closed_message = find_closed_survey_message(page)
             if closed_message:
                 log_state("SURVEY_CLOSED", closed_message)
+                maybe_pause_for_debug("SURVEY_CLOSED")
                 close_context(browser, context)
                 return "SURVEY_CLOSED"
 
             logger.error("STATE=PRESENT_OPTION_NOT_FOUND")
             capture_debug_artifacts(page)
+            maybe_pause_for_debug("PRESENT_OPTION_NOT_FOUND")
             close_context(browser, context)
             return "PRESENT_OPTION_NOT_FOUND"
 
@@ -924,11 +944,13 @@ def mark_present():
         closed_message = find_closed_survey_message(page)
         if closed_message:
             log_state("SURVEY_CLOSED_AFTER_ATTEMPT", closed_message)
+            maybe_pause_for_debug("SURVEY_CLOSED_AFTER_ATTEMPT")
             close_context(browser, context)
             return "SURVEY_CLOSED"
 
         logger.warning("STATE=NO_CONFIRMATION_AFTER_CLICK")
         capture_debug_artifacts(page)
+        maybe_pause_for_debug("NO_CONFIRMATION_AFTER_CLICK")
         # Small delay to ensure the click is registered
         time.sleep(3)
         close_context(browser, context)
