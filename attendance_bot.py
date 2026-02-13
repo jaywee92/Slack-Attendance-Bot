@@ -82,7 +82,9 @@ if WORKSPACE_SLUG.endswith(".slack.com"):
     WORKSPACE_SLUG = WORKSPACE_SLUG[: -len(".slack.com")]
 
 WORKSPACE_ARCHIVE_URL = f"https://{WORKSPACE_DOMAIN}/archives/{CHANNEL_ID}"
+APP_CHANNEL_URL = f"https://app.slack.com/client/{TEAM_ID}/{CHANNEL_ID}"
 CHANNEL_URLS = [
+    APP_CHANNEL_URL,
     WORKSPACE_ARCHIVE_URL,
 ]
 CHANNEL_CONTENT_MARKERS = [
@@ -778,6 +780,12 @@ def login_and_save_session():
                 timeout=20000,
             )
             submit_password_login_if_visible(page)
+        except Exception:
+            pass
+
+        # Continue in app client after successful authentication.
+        try:
+            page.goto(APP_CHANNEL_URL, wait_until="domcontentloaded", timeout=20000)
         except Exception:
             pass
 
