@@ -4,3 +4,11 @@ slack_auth.json
 __pycache__/
 *.pyc
 .DS_Store
+
+# Session & browser data
+playwright-profile/
+*.log
+
+# Debug screenshots
+screenshots/
+*.png

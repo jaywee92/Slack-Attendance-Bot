@@ -1,0 +1,30 @@
+services:
+  bot:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    env_file: .env
+    volumes:
+      - session_data:/session
+    environment:
+      - TZ=Europe/Berlin
+
+  bot-vnc:
+    build:
+      context: .
+      dockerfile: Dockerfile.vnc
+    env_file: .env
+    volumes:
+      - session_data:/session
+    environment:
+      - TZ=Europe/Berlin
+      - HEADLESS=false
+      - VNC_PASSWORD=change-me
+    ports:
+      - "5900:5900"
+      - "6080:6080"
+    profiles:
+      - debug
+
+volumes:
+  session_data:

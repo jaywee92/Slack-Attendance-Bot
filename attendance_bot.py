@@ -568,11 +568,22 @@ def nudge_message_history(page, direction="down"):
 
 def get_latest_survey_root(page):
     # Focus the latest survey card from Mia, if present.
-    survey_cards = page.locator('div[role="document"]', has_text="Please select an option")
-    card_count = survey_cards.count()
-    if card_count > 0:
-        logger.debug("Found survey cards: %s", card_count)
-        return survey_cards.nth(card_count - 1)
+    # Try multiple selectors for the survey container, in order of specificity.
+    survey_selectors = [
+        ('div[role="document"]', "Please select an option"),
+        ('div[role="document"]', "present"),
+        ('div[data-qa="message_content"]', "Please select an option"),
+        ('div[data-qa="message_content"]', "present"),
+    ]
+    for selector, text in survey_selectors:
+        survey_cards = page.locator(selector, has_text=text)
+        card_count = survey_cards.count()
+        if card_count > 0:
+            logger.debug(
+                "Found survey cards via %s with text '%s': %s",
+                selector, text, card_count,
+            )
+            return survey_cards.nth(card_count - 1)
     return page
 
 
@@ -908,8 +919,11 @@ def mark_present():
         goto_channel(page, timeout_ms=15000)
         log_state("CHANNEL_OPENED", page.url)
 
-        # Slack can be slow to load
-        time.sleep(20)
+        # Wait for Slack to render initial content
+        try:
+            page.wait_for_load_state("domcontentloaded", timeout=10000)
+        except Exception:
+            pass
         dismiss_cookie_or_privacy_overlays(page)
 
         # Try to wait for message pane to render before selector lookups.
@@ -928,7 +942,10 @@ def mark_present():
                 log_state("CHANNEL_ARCHIVE_FALLBACK_OPENED", page.url)
             except Exception as exc:
                 logger.warning("Archive fallback navigation failed: %s", exc)
-            time.sleep(8)
+            try:
+                page.wait_for_load_state("domcontentloaded", timeout=10000)
+            except Exception:
+                pass
             dismiss_cookie_or_privacy_overlays(page)
             channel_ready = wait_for_channel_content(page, timeout_s=35)
 
