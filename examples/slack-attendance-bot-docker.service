@@ -1,0 +1,9 @@
+[Unit]
+Description=Slack Attendance Bot (Docker)
+Requires=docker.service
+After=docker.service
+
+[Service]
+Type=oneshot
+WorkingDirectory=/home/jaywee92/Slack-Attendance-Bot
+ExecStart=/usr/bin/docker compose run --rm bot
