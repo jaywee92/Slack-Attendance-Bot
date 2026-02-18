@@ -505,23 +505,35 @@ def is_glitch_page(page):
     )
 
 
-def find_closed_survey_message(page):
-    try:
-        body_text = page.locator("body").inner_text(timeout=2000)
-    except Exception:
-        body_text = ""
+def find_closed_survey_message(page, scope=None):
+    """Check whether the survey is closed.
 
-    body_text_lower = body_text.lower()
+    If *scope* is given (a Locator), only look inside that element.
+    Otherwise fall back to the full page – but only match the *last*
+    occurrence so that an older "closed" banner doesn't shadow a newer
+    open survey.
+    """
+    root = scope if scope is not None else page
+
     for pattern in CLOSED_SURVEY_PATTERNS:
-        if pattern.lower() in body_text_lower:
-            return pattern
-
-        locator = page.locator("div.p-rich_text_section", has_text=pattern)
-        if locator.count() > 0:
+        locator = root.locator("div.p-rich_text_section", has_text=pattern)
+        count = locator.count()
+        if count > 0:
             try:
-                return locator.first.inner_text().strip()
+                return locator.nth(count - 1).inner_text().strip()
             except Exception:
                 return pattern
+
+    # Fallback: plain-text search inside the scoped root only
+    try:
+        root_text = root.locator("body").inner_text(timeout=2000) if scope is None else root.inner_text(timeout=2000)
+    except Exception:
+        root_text = ""
+
+    root_text_lower = root_text.lower()
+    for pattern in CLOSED_SURVEY_PATTERNS:
+        if pattern.lower() in root_text_lower:
+            return pattern
     return None
 
 
@@ -973,6 +985,13 @@ def mark_present():
                 pass
             log_state("CHANNEL_MARKERS_MISSING_CONTINUING", page.url)
 
+        # Always capture a debug screenshot so we can inspect what the bot sees.
+        try:
+            page.screenshot(path="/session/last_run.png", full_page=True)
+            logger.info("STATE=DEBUG_SCREENSHOT_SAVED | /session/last_run.png")
+        except Exception as exc:
+            logger.warning("Could not save debug screenshot: %s", exc)
+
         try:
             body_text = page.locator("body").inner_text(timeout=3000).lower()
             prompt_present = "please select an option" in body_text
@@ -984,15 +1003,14 @@ def mark_present():
         except Exception:
             logger.warning("Failed to read body text for survey text scan")
 
-        closed_message = find_closed_survey_message(page)
-        if closed_message:
-            log_state("SURVEY_CLOSED", closed_message)
-            close_context(browser, context)
-            return "SURVEY_CLOSED"
-
+        # IMPORTANT: Search for the "Present" button FIRST.  The channel
+        # may contain *both* an older closed survey AND a newer open one.
+        # Only declare "closed" when no clickable option exists at all.
         action, present_options, count = find_present_option(page)
         if count == 0:
-            closed_message = find_closed_survey_message(page)
+            # No present button anywhere — now check if survey is closed.
+            survey_root = get_latest_survey_root(page)
+            closed_message = find_closed_survey_message(page, scope=survey_root if survey_root is not page else None)
             if closed_message:
                 log_state("SURVEY_CLOSED", closed_message)
                 maybe_pause_for_debug("SURVEY_CLOSED")
