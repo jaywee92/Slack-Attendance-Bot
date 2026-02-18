@@ -6,6 +6,8 @@ services:
     env_file: .env
     volumes:
       - session_data:/session
+      - /etc/localtime:/etc/localtime:ro
+      - /etc/timezone:/etc/timezone:ro
     environment:
       - TZ=Europe/Berlin
 
@@ -16,6 +18,8 @@ services:
     env_file: .env
     volumes:
       - session_data:/session
+      - /etc/localtime:/etc/localtime:ro
+      - /etc/timezone:/etc/timezone:ro
     environment:
       - TZ=Europe/Berlin
       - HEADLESS=false

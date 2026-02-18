@@ -1,5 +1,9 @@
 FROM mcr.microsoft.com/playwright/python:v1.58.0-jammy
 
+# Set timezone to Europe/Berlin (CET/CEST)
+ENV TZ=Europe/Berlin
+RUN ln -snf /usr/share/zoneinfo/$TZ /etc/localtime && echo $TZ > /etc/timezone
+
 WORKDIR /app
 
 # Ensure session volume mount point exists
