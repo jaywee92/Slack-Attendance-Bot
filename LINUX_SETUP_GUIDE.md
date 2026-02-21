@@ -1,109 +1,112 @@
 # 🤖 Slack Attendance Bot — Linux Setup Guide
 
-> **Für neue Linux-Nutzer** — Schritt für Schritt erklärt, mit allen Befehlen zum Kopieren.
+> **For new Linux users** — A clear, step-by-step guide with every command ready to copy and paste.
 
 ---
 
-## 📋 Inhaltsverzeichnis
+## 📋 Table of Contents
 
-1. [Was macht dieser Bot?](#1-was-macht-dieser-bot)
-2. [Voraussetzungen](#2-voraussetzungen)
-3. [Schritt 1 — Repository klonen](#schritt-1--repository-klonen)
-4. [Schritt 2 — Python & Abhängigkeiten installieren](#schritt-2--python--abhängigkeiten-installieren)
-5. [Schritt 3 — Playwright Browser installieren](#schritt-3--playwright-browser-installieren)
-6. [Schritt 4 — Konfiguration (.env Datei)](#schritt-4--konfiguration-env-datei)
-7. [Schritt 5 — Ersten Start ausführen](#schritt-5--ersten-start-ausführen)
-8. [Schritt 6 — Automatisch per Cron planen](#schritt-6--automatisch-per-cron-planen)
-9. [Schritt 7 — Automatisch per Systemd planen (empfohlen)](#schritt-7--automatisch-per-systemd-planen-empfohlen)
-10. [Troubleshooting — Häufige Fehler](#troubleshooting--häufige-fehler)
+1. [What does this bot do?](#1-what-does-this-bot-do)
+2. [Requirements](#2-requirements)
+3. [Step 1 — Clone the Repository](#step-1--clone-the-repository)
+4. [Step 2 — Install Python & Dependencies](#step-2--install-python--dependencies)
+5. [Step 3 — Install the Playwright Browser](#step-3--install-the-playwright-browser)
+6. [Step 4 — Configuration (.env file)](#step-4--configuration-env-file)
+7. [Step 5 — Run the Bot for the First Time](#step-5--run-the-bot-for-the-first-time)
+8. [Step 6 — Schedule Automatically with Cron](#step-6--schedule-automatically-with-cron)
+9. [Step 7 — Schedule Automatically with Systemd (Recommended)](#step-7--schedule-automatically-with-systemd-recommended)
+10. [Step 8 — Run with Docker (Optional)](#step-8--run-with-docker-optional)
+11. [Troubleshooting — Common Errors](#troubleshooting--common-errors)
 
 ---
 
-## 1. Was macht dieser Bot?
+## 1. What does this bot do?
 
-Der Slack Attendance Bot **loggt sich automatisch in Slack ein** und klickt für dich auf „Present" in einem Anwesenheits-Formular — jeden Tag, pünktlich, ohne dass du es vergisst.
+The Slack Attendance Bot **automatically logs into Slack and clicks "Present"** on an attendance form — every day, on time, so you never forget.
 
 ```
-Bot startet → Slack-Login → Kanal öffnen → "Present" klicken → Fertig ✅
+Bot starts → Slack login → Open channel → Click "Present" → Done ✅
 ```
+
+Once set up, the bot runs completely in the background on a schedule you define. No manual action required.
 
 ---
 
-## 2. Voraussetzungen
+## 2. Requirements
 
-Überprüfe zuerst, ob folgendes auf deinem System vorhanden ist:
+Before you begin, check that the following are available on your system:
 
 ```bash
-# Python-Version prüfen (mindestens 3.9 erforderlich)
+# Check Python version — at least 3.9 is required
 python3 --version
 ```
 
-Falls Python nicht installiert ist:
+If Python is not installed:
 
 ```bash
 sudo apt update
 sudo apt install python3 python3-pip python3-venv -y
 ```
 
-Weitere benötigte Pakete:
+Also install Git and Curl:
 
 ```bash
 sudo apt install git curl -y
 ```
 
-> **Hinweis:** Diese Befehle funktionieren auf **Ubuntu/Debian**. Bei anderen Distributionen ersetze `apt` durch `dnf` (Fedora) oder `pacman` (Arch).
+> **Note:** These commands work on **Ubuntu / Debian**. On other distributions, replace `apt` with `dnf` (Fedora) or `pacman` (Arch Linux).
 
 ---
 
-## Schritt 1 — Repository klonen
+## Step 1 — Clone the Repository
 
-Lade den Bot-Code auf deinen Computer:
+Download the bot's code to your computer:
 
 ```bash
 git clone https://github.com/jaywee92/Slack-Attendance-Bot.git
 ```
 
-Wechsle in den neuen Ordner:
+Move into the new folder:
 
 ```bash
 cd Slack-Attendance-Bot
 ```
 
-Überprüfe, dass alle Dateien vorhanden sind:
+Verify that all files are present:
 
 ```bash
 ls -la
 ```
 
-Du solltest diese Dateien sehen: `attendance_bot.py`, `requirements.txt`, `.env.example`, `docker-compose.yml`, `examples/`
+You should see these files: `attendance_bot.py`, `requirements.txt`, `.env.example`, `docker-compose.yml`, `examples/`
 
 ---
 
-## Schritt 2 — Python & Abhängigkeiten installieren
+## Step 2 — Install Python & Dependencies
 
-### 2a — Virtuelle Umgebung erstellen (empfohlen)
+### 2a — Create a Virtual Environment (Recommended)
 
-Eine virtuelle Umgebung hält die Bot-Pakete getrennt vom Rest deines Systems:
+A virtual environment keeps the bot's packages separate from the rest of your system — this avoids conflicts with other Python projects:
 
 ```bash
 python3 -m venv venv
 ```
 
-Virtuelle Umgebung aktivieren:
+Activate the virtual environment:
 
 ```bash
 source venv/bin/activate
 ```
 
-> ✅ Du siehst nun `(venv)` am Anfang deiner Kommandozeile — das ist korrekt.
+> ✅ You will now see `(venv)` at the beginning of your command prompt — that is correct and expected.
 
-### 2b — Abhängigkeiten installieren
+### 2b — Install Dependencies
 
 ```bash
 pip install -r requirements.txt
 ```
 
-Erfolgreiche Ausgabe sieht ungefähr so aus:
+A successful installation looks like this:
 
 ```
 Successfully installed playwright-1.58.0 python-dotenv-1.0.0 ...
@@ -111,29 +114,23 @@ Successfully installed playwright-1.58.0 python-dotenv-1.0.0 ...
 
 ---
 
-## Schritt 3 — Playwright Browser installieren
+## Step 3 — Install the Playwright Browser
 
-Playwright braucht einen echten Browser (Chromium), um Slack zu steuern:
-
-```bash
-python -m playwright install
-```
-
-Das dauert 1–2 Minuten und lädt ca. 200 MB herunter.
-
-Nur Chromium installieren (spart Speicherplatz):
+Playwright controls a real browser (Chromium) to interact with Slack. It needs to be downloaded separately:
 
 ```bash
 python -m playwright install chromium
 ```
 
-Systemabhängigkeiten installieren (wichtig auf Server ohne Desktop!):
+This takes 1–2 minutes and downloads approximately 200 MB.
+
+Install the required system-level browser dependencies (important on servers without a desktop environment!):
 
 ```bash
 python -m playwright install-deps chromium
 ```
 
-Überprüfen ob alles funktioniert:
+Verify the installation worked:
 
 ```bash
 python -m playwright --version
@@ -141,229 +138,227 @@ python -m playwright --version
 
 ---
 
-## Schritt 4 — Konfiguration (.env Datei)
+## Step 4 — Configuration (.env file)
 
-### 4a — .env Datei erstellen
+### 4a — Create the .env File
 
-Kopiere die Vorlage:
+Copy the provided template:
 
 ```bash
 cp .env.example .env
 ```
 
-Öffne die Datei mit einem Texteditor:
+Open the file in a text editor:
 
 ```bash
 nano .env
 ```
 
-> **Alternativer Editor:** `vim .env` oder `gedit .env` (Desktop)
+> **Alternative editors:** `vim .env` or `gedit .env` (if you have a desktop)
 
-### 4b — Pflichtfelder ausfüllen
+### 4b — Fill in the Required Fields
 
-Ersetze die Platzhalter mit deinen echten Daten:
+Replace the placeholder values with your actual credentials:
 
 ```env
-# ── Pflichtfelder ──────────────────────────────────────
-SLACK_EMAIL=deine@email.de
-SLACK_PASSWORD=deinPasswort123
+# ── Required fields ────────────────────────────────────
+SLACK_EMAIL=your@email.com
+SLACK_PASSWORD=yourPassword123
 
-# Deine Slack Workspace-Adresse (ohne https://)
-WORKSPACE_DOMAIN=deinworkspace.slack.com
+# Your Slack workspace address (without https://)
+WORKSPACE_DOMAIN=yourworkspace.slack.com
 
-# Nur der Name des Workspaces (ohne .slack.com)
-WORKSPACE_SLUG=deinworkspace
+# Only the workspace name (without .slack.com)
+WORKSPACE_SLUG=yourworkspace
 ```
 
-### 4c — Optionale Einstellungen (für Fortgeschrittene)
+### 4c — Optional Settings (for Advanced Users)
 
 ```env
-# ── Optionale Felder ───────────────────────────────────
-# Headless = true → Browser unsichtbar im Hintergrund
+# ── Optional fields ────────────────────────────────────
+# Headless = true → browser runs invisibly in the background
 HEADLESS=true
 
-# Bei erstem Login: true setzen (für Sicherheits-Code Eingabe)
+# Set to true only for the very first login (to enter your security code)
 ALLOW_INTERACTIVE_LOGIN=false
 
-# Log-Level: INFO (normal) oder DEBUG (ausführlich)
+# Log level: INFO (normal) or DEBUG (very detailed output)
 LOG_LEVEL=INFO
 
-# Log in Datei speichern
-LOG_FILE=/home/deinuser/slack-bot/bot.log
+# Save log output to a file
+LOG_FILE=/home/yourusername/slack-bot/bot.log
 
-# Timeout für das Suchen des "Present"-Buttons (Sekunden)
+# Timeout for finding the "Present" button (in seconds)
 FIND_PRESENT_TIMEOUT_S=45
 ```
 
-### 4d — Datei speichern
+### 4d — Save the File
 
-In `nano`: Drücke `Ctrl + O`, dann `Enter`, dann `Ctrl + X`
+In `nano`: Press `Ctrl + O`, then `Enter`, then `Ctrl + X` to save and exit.
 
-### ⚠️ Sicherheitshinweis
+### ⚠️ Security Warning
 
-Die `.env` Datei enthält dein Passwort — **niemals** in Git hochladen!
+The `.env` file contains your Slack password — **never** commit it to Git or share it publicly.
+
+Check that `.env` is listed in `.gitignore`:
 
 ```bash
-# Überprüfen ob .env im .gitignore steht
 cat .gitignore | grep .env
 ```
 
-Du solltest `.env` in der Ausgabe sehen ✅
+You should see `.env` in the output ✅
 
 ---
 
-## Schritt 5 — Ersten Start ausführen
+## Step 5 — Run the Bot for the First Time
 
-### 5a — Virtuelle Umgebung aktivieren (falls noch nicht aktiv)
+### 5a — Activate the Virtual Environment (if not already active)
 
 ```bash
 cd ~/Slack-Attendance-Bot
 source venv/bin/activate
 ```
 
-### 5b — Bot starten
+### 5b — Start the Bot
 
 ```bash
 python attendance_bot.py
 ```
 
-### 5c — Ausgabe verstehen
+### 5c — Understanding the Output
 
-| Ausgabe | Bedeutung |
-|--------|-----------|
-| `STATE=RUN_STARTED` | Bot startet |
-| `STATE=SESSION_INVALID` | Kein Login gespeichert — erster Start |
-| `STATE=LOGIN_REQUIRED` | Bot loggt sich jetzt ein |
-| `STATE=LOGIN_AUTHENTICATED` | Login erfolgreich ✅ |
-| `STATE=PRESENT_RECORDED` | "Present" geklickt — fertig! ✅ |
-| `STATE=SURVEY_CLOSED` | Formular bereits geschlossen |
-| `STATE=RUN_FAILED` | Fehler aufgetreten ❌ |
+The bot logs its progress using `STATE=` markers:
 
-### 5d — Erster Login mit Sicherheits-Code
+| Output | Meaning |
+|--------|---------|
+| `STATE=RUN_STARTED` | Bot is starting up |
+| `STATE=SESSION_INVALID` | No saved login found — first run |
+| `STATE=LOGIN_REQUIRED` | Bot is now logging into Slack |
+| `STATE=LOGIN_AUTHENTICATED` | Login successful ✅ |
+| `STATE=PRESENT_RECORDED` | "Present" was clicked — done! ✅ |
+| `STATE=SURVEY_CLOSED` | Attendance form is already closed |
+| `STATE=RUN_FAILED` | Something went wrong ❌ |
 
-Beim allerersten Start schickt Slack einen **Sicherheits-Code** per E-Mail. Damit der Bot diesen Code eingeben kann, setze vorübergehend:
+### 5d — First Login: Entering a Security Code
+
+On the very first run, Slack will send a **security code to your email**. To allow the bot to enter this code interactively, temporarily set:
 
 ```bash
-# In .env Datei ändern:
+# Open your .env file and change:
 ALLOW_INTERACTIVE_LOGIN=true
 ```
 
-Dann Bot starten:
+Then start the bot:
 
 ```bash
 python attendance_bot.py
 ```
 
-Der Bot pausiert und fragt:
+The bot will pause and prompt you:
 
 ```
 Enter security code from email:
 ```
 
-Gib den Code aus deiner E-Mail ein und drücke `Enter`. Nach erfolgreichem Login:
+Type the code from your email and press `Enter`. After a successful login:
 
 ```bash
-# Wieder auf false setzen (für automatischen Betrieb)
-# Öffne .env und setze:
+# Open .env again and set it back to false (for automated use):
 ALLOW_INTERACTIVE_LOGIN=false
 ```
 
-Die Login-Session wird in `slack_auth.json` gespeichert. Beim nächsten Start ist kein Code mehr nötig.
+The login session is saved to `slack_auth.json`. Future runs will not require a code unless the session expires.
 
 ---
 
-## Schritt 6 — Automatisch per Cron planen
+## Step 6 — Schedule Automatically with Cron
 
-Cron ist der einfachste Weg, den Bot automatisch täglich auszuführen.
+Cron is the simplest way to run the bot automatically at set times every day.
 
-### 6a — Pfade herausfinden
+### 6a — Find Your Paths
 
 ```bash
-# Absoluten Pfad von Python im venv
+# Full path to Python inside the virtual environment
 which python3
-# Beispielausgabe: /home/jaywee92/Slack-Attendance-Bot/venv/bin/python3
+# Example output: /home/jaywee92/Slack-Attendance-Bot/venv/bin/python3
 
-# Absoluten Pfad des Bot-Skripts
+# Full path to the bot script
 realpath attendance_bot.py
-# Beispielausgabe: /home/jaywee92/Slack-Attendance-Bot/attendance_bot.py
+# Example output: /home/jaywee92/Slack-Attendance-Bot/attendance_bot.py
 ```
 
-### 6b — Crontab öffnen
+### 6b — Open the Crontab Editor
 
 ```bash
 crontab -e
 ```
 
-Falls gefragt wird, welchen Editor: Wähle `1` für `nano`
+If asked which editor to use, type `1` and press Enter to select `nano`.
 
-### 6c — Automatischen Job hinzufügen
+### 6c — Add the Scheduled Job
 
-Füge am Ende der Datei diese Zeile ein:
+Add this line at the very end of the file:
 
 ```cron
-# Slack Attendance Bot — täglich 9:05 Uhr und 14:05 Uhr (Mo-Fr)
-5 9,14 * * 1-5 cd /home/DEIN_USERNAME/Slack-Attendance-Bot && /home/DEIN_USERNAME/Slack-Attendance-Bot/venv/bin/python3 attendance_bot.py >> /home/DEIN_USERNAME/slack-bot.log 2>&1
+# Slack Attendance Bot — runs at 09:05 and 14:05, Monday to Friday
+5 9,14 * * 1-5 cd /home/YOUR_USERNAME/Slack-Attendance-Bot && /home/YOUR_USERNAME/Slack-Attendance-Bot/venv/bin/python3 attendance_bot.py >> /home/YOUR_USERNAME/slack-bot.log 2>&1
 ```
 
-> 🔁 Ersetze `DEIN_USERNAME` durch deinen tatsächlichen Linux-Benutzernamen!
+> 🔁 Replace `YOUR_USERNAME` with your actual Linux username!
 
-Deinen Benutzernamen findest du mit:
+To find your username, run:
 
 ```bash
 whoami
 ```
 
-### 6d — Crontab speichern und prüfen
+### 6d — Save and Verify
 
 In nano: `Ctrl + O` → `Enter` → `Ctrl + X`
 
-Crontab-Inhalt anzeigen:
+Check that the job was saved:
 
 ```bash
 crontab -l
 ```
 
-### 6e — Log anschauen
+### 6e — Watch the Log
 
-Nach dem nächsten geplanten Lauf:
+After the next scheduled run:
 
 ```bash
 tail -f ~/slack-bot.log
 ```
 
+Press `Ctrl + C` to stop following the log.
+
 ---
 
-## Schritt 7 — Automatisch per Systemd planen (empfohlen)
+## Step 7 — Schedule Automatically with Systemd (Recommended)
 
-Systemd ist zuverlässiger als Cron und funktioniert auch nach einem Server-Neustart korrekt.
+Systemd timers are more reliable than Cron. They survive server reboots, retry after missed runs, and integrate with the system journal.
 
-### 7a — Systemd User-Verzeichnis erstellen
+### 7a — Create the Systemd User Directory
 
 ```bash
 mkdir -p ~/.config/systemd/user/
 ```
 
-### 7b — Service-Datei anpassen und kopieren
+### 7b — Copy and Edit the Service File
 
-Öffne die Beispiel-Service-Datei:
-
-```bash
-cat examples/slack-attendance-bot.service
-```
-
-Kopiere sie in dein Systemd-Verzeichnis:
+Copy the example service file:
 
 ```bash
 cp examples/slack-attendance-bot.service ~/.config/systemd/user/
 ```
 
-Öffne und passe die Pfade an:
+Open it for editing:
 
 ```bash
 nano ~/.config/systemd/user/slack-attendance-bot.service
 ```
 
-Ersetze die Pfade durch deine echten Pfade:
+Update all paths to match your system — replace `YOUR_USERNAME` with your real username:
 
 ```ini
 [Unit]
@@ -372,28 +367,30 @@ After=network.target
 
 [Service]
 Type=oneshot
-WorkingDirectory=/home/DEIN_USERNAME/Slack-Attendance-Bot
-ExecStart=/home/DEIN_USERNAME/Slack-Attendance-Bot/venv/bin/python3 /home/DEIN_USERNAME/Slack-Attendance-Bot/attendance_bot.py
-EnvironmentFile=/home/DEIN_USERNAME/Slack-Attendance-Bot/.env
-StandardOutput=append:/home/DEIN_USERNAME/slack-bot.log
-StandardError=append:/home/DEIN_USERNAME/slack-bot.log
+WorkingDirectory=/home/YOUR_USERNAME/Slack-Attendance-Bot
+ExecStart=/home/YOUR_USERNAME/Slack-Attendance-Bot/venv/bin/python3 /home/YOUR_USERNAME/Slack-Attendance-Bot/attendance_bot.py
+EnvironmentFile=/home/YOUR_USERNAME/Slack-Attendance-Bot/.env
+StandardOutput=append:/home/YOUR_USERNAME/slack-bot.log
+StandardError=append:/home/YOUR_USERNAME/slack-bot.log
 
 [Install]
 WantedBy=default.target
 ```
 
-### 7c — Timer-Datei anpassen und kopieren
+Save: `Ctrl + O` → `Enter` → `Ctrl + X`
+
+### 7c — Copy and Edit the Timer File
 
 ```bash
 cp examples/slack-attendance-bot.timer ~/.config/systemd/user/
 nano ~/.config/systemd/user/slack-attendance-bot.timer
 ```
 
-Inhalt der Timer-Datei:
+The timer file should look like this:
 
 ```ini
 [Unit]
-Description=Slack Attendance Bot Timer (09:05 und 14:05, Mo-Fr)
+Description=Slack Attendance Bot Timer (09:05 and 14:05, Mon–Fri)
 
 [Timer]
 OnCalendar=Mon-Fri 09:05
@@ -404,41 +401,208 @@ Persistent=true
 WantedBy=timers.target
 ```
 
-### 7d — Systemd neu laden und Timer aktivieren
+Save and exit.
+
+### 7d — Enable and Start the Timer
 
 ```bash
-# Systemd neu laden
+# Reload systemd to pick up the new files
 systemctl --user daemon-reload
 
-# Timer aktivieren und sofort starten
+# Enable the timer so it starts automatically on login/boot
 systemctl --user enable --now slack-attendance-bot.timer
 
-# Status prüfen
+# Check the timer status
 systemctl --user status slack-attendance-bot.timer
 ```
 
-### 7e — Nächsten geplanten Lauf anzeigen
+### 7e — View the Next Scheduled Run
 
 ```bash
 systemctl --user list-timers --all | grep slack
 ```
 
-### 7f — Bot manuell testen (ohne auf Cron/Timer warten)
+### 7f — Test the Bot Manually (Without Waiting for the Timer)
 
 ```bash
 systemctl --user start slack-attendance-bot.service
+```
 
-# Log live anschauen
+View the live log output:
+
+```bash
 journalctl --user -u slack-attendance-bot.service -f
+```
+
+Press `Ctrl + C` to stop.
+
+---
+
+## Step 8 — Run with Docker (Optional)
+
+Docker is an alternative to the manual Python setup. It packages the bot and all its dependencies (including the Chromium browser) into an isolated container — no virtual environment, no `playwright install` needed.
+
+> **When to use Docker?**
+> - You manage multiple projects and want clean isolation
+> - You are running the bot on a server without a desktop environment
+> - You are familiar with Docker and prefer container-based workflows
+
+---
+
+### 8a — Install Docker
+
+If Docker is not yet installed:
+
+```bash
+# Install Docker Engine (Ubuntu/Debian)
+sudo apt update
+sudo apt install -y ca-certificates curl gnupg
+curl -fsSL https://get.docker.com | sudo sh
+
+# Add your user to the docker group (so you don't need sudo every time)
+sudo usermod -aG docker $USER
+
+# Log out and back in for the group change to take effect
+# Then verify the installation:
+docker --version
+docker compose version
 ```
 
 ---
 
-## Troubleshooting — Häufige Fehler
+### 8b — Clone the Repository
+
+```bash
+git clone https://github.com/jaywee92/Slack-Attendance-Bot.git
+cd Slack-Attendance-Bot
+```
+
+---
+
+### 8c — Create the .env File
+
+```bash
+cp .env.example .env
+nano .env
+```
+
+Fill in your credentials exactly as described in [Step 4](#step-4--configuration-env-file).
+
+> **Important for Docker:** Set `HEADLESS=true` — the container has no display.
+
+---
+
+### 8d — Build and Run the Container
+
+Build the Docker image (only needs to be done once, or after code changes):
+
+```bash
+docker compose build
+```
+
+Run the bot once:
+
+```bash
+docker compose run --rm bot
+```
+
+The `--rm` flag removes the temporary container after it finishes — the saved login session is stored in a persistent Docker volume (`session_data`) and survives between runs.
+
+---
+
+### 8e — First Login Inside Docker
+
+On the very first run, Slack will send a security code to your email. To allow interactive input:
+
+```bash
+# In .env, temporarily set:
+ALLOW_INTERACTIVE_LOGIN=true
+```
+
+Then run:
+
+```bash
+docker compose run --rm -it bot
+```
+
+Enter the security code when prompted. After successful login, restore the setting:
+
+```bash
+# In .env, set it back:
+ALLOW_INTERACTIVE_LOGIN=false
+```
+
+The session is saved inside the `session_data` volume and will be reused on future runs.
+
+---
+
+### 8f — Schedule with Cron (Docker)
+
+Instead of activating a virtual environment, use `docker compose run` inside your cron job:
+
+```bash
+crontab -e
+```
+
+Add this line (replace `/home/YOUR_USERNAME` with your actual path):
+
+```cron
+# Slack Attendance Bot via Docker — runs at 09:05 and 14:05, Monday to Friday
+5 9,14 * * 1-5 cd /home/YOUR_USERNAME/Slack-Attendance-Bot && docker compose run --rm bot >> /home/YOUR_USERNAME/slack-bot-docker.log 2>&1
+```
+
+---
+
+### 8g — Debug Mode with VNC (View the Browser Remotely)
+
+The repository includes a special `bot-vnc` Docker service that starts a visible browser session you can watch remotely via a web browser — useful for debugging.
+
+**Start the VNC container:**
+
+```bash
+# First, change the default VNC password in docker-compose.yml:
+# Look for: VNC_PASSWORD=change-me
+nano docker-compose.yml
+
+# Then start the VNC service:
+docker compose --profile debug up bot-vnc
+```
+
+**Open a browser and navigate to:**
+
+```
+http://YOUR_SERVER_IP:6080
+```
+
+You will see a live view of the browser controlled by the bot. Press `Ctrl + C` in the terminal to stop the container.
+
+> 🔒 **Security:** Never expose port `6080` or `5900` to the public internet without a firewall rule or VPN. Use these ports only on a local network or over SSH tunnelling.
+
+---
+
+### 8h — Useful Docker Commands
+
+```bash
+# View the saved login session volume
+docker volume inspect slack-attendance-bot_session_data
+
+# Remove the saved session (forces fresh login on next run)
+docker volume rm slack-attendance-bot_session_data
+
+# View logs from the last run
+docker compose logs bot
+
+# Remove all stopped containers (cleanup)
+docker compose down
+```
+
+---
+
+## Troubleshooting — Common Errors
 
 ### ❌ `ModuleNotFoundError: No module named 'playwright'`
 
-Virtuelle Umgebung nicht aktiviert:
+The virtual environment is not activated:
 
 ```bash
 source ~/Slack-Attendance-Bot/venv/bin/activate
@@ -447,9 +611,9 @@ pip install -r requirements.txt
 
 ---
 
-### ❌ `Executable doesn't exist` oder Browser-Fehler
+### ❌ `Executable doesn't exist` or browser-related error
 
-Playwright-Browser fehlen:
+The Playwright browser was not installed:
 
 ```bash
 source ~/Slack-Attendance-Bot/venv/bin/activate
@@ -459,41 +623,41 @@ python -m playwright install-deps chromium
 
 ---
 
-### ❌ `STATE=SESSION_INVALID` — Bot loggt sich nicht ein
+### ❌ `STATE=SESSION_INVALID` — Bot does not log in
 
-Session ist abgelaufen. Neuen Login durchführen:
+The saved session has expired. Perform a fresh login:
 
 ```bash
-# In .env setzen:
+# In .env, set:
 ALLOW_INTERACTIVE_LOGIN=true
 
-# Dann starten und Sicherheits-Code eingeben
+# Start the bot and enter the security code when prompted
 python attendance_bot.py
 
-# Danach wieder zurücksetzen:
+# Then reset in .env:
 ALLOW_INTERACTIVE_LOGIN=false
 ```
 
 ---
 
-### ❌ `STATE=RUN_FAILED` — Allgemeiner Fehler
+### ❌ `STATE=RUN_FAILED` — General failure
 
-Detailliertes Logging aktivieren:
+Enable verbose logging to get more detail:
 
 ```bash
-# In .env setzen:
+# In .env, set:
 LOG_LEVEL=DEBUG
 HEADLESS=false
 
-# Bot starten und Browser-Fenster beobachten
+# Start the bot and watch the browser window
 python attendance_bot.py
 ```
 
 ---
 
-### ❌ `Permission denied` beim Cron
+### ❌ `Permission denied` in Cron
 
-Bot-Skript ausführbar machen:
+Make the script executable:
 
 ```bash
 chmod +x ~/Slack-Attendance-Bot/attendance_bot.py
@@ -501,13 +665,13 @@ chmod +x ~/Slack-Attendance-Bot/attendance_bot.py
 
 ---
 
-### ❌ Bot läuft, aber kein "Present" gefunden
+### ❌ Bot runs but "Present" button is not found
 
-Mögliche Ursachen:
-- Das Formular wurde noch nicht geöffnet
-- `FIND_PRESENT_TIMEOUT_S` zu niedrig gesetzt
+Possible causes:
+- The attendance form has not been opened yet
+- The `FIND_PRESENT_TIMEOUT_S` value is too low
 
-Timeout erhöhen in `.env`:
+Increase the timeout in `.env`:
 
 ```env
 FIND_PRESENT_TIMEOUT_S=90
@@ -515,75 +679,104 @@ FIND_PRESENT_TIMEOUT_S=90
 
 ---
 
-### 📋 Log-Datei live anschauen
+### 📋 View Log Output at Any Time
 
 ```bash
-# Bei Cron
+# If using Cron
 tail -f ~/slack-bot.log
 
-# Bei Systemd
+# If using Systemd
 journalctl --user -u slack-attendance-bot.service -n 50 --no-pager
 ```
 
 ---
 
-### 🔄 Bot-Status nach jedem Lauf prüfen
+### 🔄 Exit Codes — What Do They Mean?
 
-| Exit Code | Bedeutung |
-|-----------|-----------|
-| `0` | Erfolgreich — "Present" geklickt ✅ |
-| `2` | Keine gültige Session — Login erforderlich |
-| `3` | "Present" nicht gefunden — Formular möglicherweise geschlossen |
+| Exit Code | Meaning |
+|-----------|---------|
+| `0` | Success — "Present" was recorded ✅ |
+| `2` | No valid session — login required |
+| `3` | "Present" button not found — form may be closed |
 
-Letzten Exit-Code prüfen:
+Check the exit code manually:
 
 ```bash
-python attendance_bot.py; echo "Exit Code: $?"
+python attendance_bot.py; echo "Exit code: $?"
 ```
 
 ---
 
-## ✅ Zusammenfassung — Alle Befehle auf einen Blick
+## ✅ Quick Reference — All Commands at a Glance
+
+### Option A — Native Python Setup
 
 ```bash
-# 1. Repository klonen
+# 1. Clone the repository
 git clone https://github.com/jaywee92/Slack-Attendance-Bot.git
 cd Slack-Attendance-Bot
 
-# 2. Virtuelle Umgebung erstellen und aktivieren
+# 2. Create and activate a virtual environment
 python3 -m venv venv
 source venv/bin/activate
 
-# 3. Abhängigkeiten installieren
+# 3. Install dependencies
 pip install -r requirements.txt
 python -m playwright install chromium
 python -m playwright install-deps chromium
 
-# 4. Konfiguration erstellen
+# 4. Create and fill in the configuration file
 cp .env.example .env
-nano .env          # Deine Zugangsdaten eintragen
+nano .env
 
-# 5. Bot testen
+# 5. Run the bot to test it
 python attendance_bot.py
 
-# 6a. Cron einrichten (einfach)
+# 6a. Schedule with Cron (simple)
 crontab -e
-# Zeile einfügen: 5 9,14 * * 1-5 cd ~/Slack-Attendance-Bot && ./venv/bin/python3 attendance_bot.py
+# Add: 5 9,14 * * 1-5 cd ~/Slack-Attendance-Bot && ./venv/bin/python3 attendance_bot.py
 
-# 6b. ODER Systemd einrichten (empfohlen)
+# 6b. OR schedule with Systemd (recommended)
 cp examples/slack-attendance-bot.service ~/.config/systemd/user/
-cp examples/slack-attendance-bot.timer ~/.config/systemd/user/
+cp examples/slack-attendance-bot.timer   ~/.config/systemd/user/
+# Edit both files and replace YOUR_USERNAME with your actual username
 systemctl --user daemon-reload
 systemctl --user enable --now slack-attendance-bot.timer
 ```
 
+### Option B — Docker Setup
+
+```bash
+# 1. Install Docker
+curl -fsSL https://get.docker.com | sudo sh
+sudo usermod -aG docker $USER   # log out and back in after this
+
+# 2. Clone the repository
+git clone https://github.com/jaywee92/Slack-Attendance-Bot.git
+cd Slack-Attendance-Bot
+
+# 3. Configure
+cp .env.example .env
+nano .env   # set HEADLESS=true for Docker
+
+# 4. Build the image
+docker compose build
+
+# 5. Run once to test
+docker compose run --rm bot
+
+# 6. Schedule with Cron (Docker)
+crontab -e
+# Add: 5 9,14 * * 1-5 cd ~/Slack-Attendance-Bot && docker compose run --rm bot
+```
+
 ---
 
-## 📞 Hilfe & Support
+## 📞 Help & Support
 
 - **GitHub Issues:** [github.com/jaywee92/Slack-Attendance-Bot/issues](https://github.com/jaywee92/Slack-Attendance-Bot/issues)
-- **Vollständige Dokumentation:** [README.md](README.md)
+- **Full Documentation:** [README.md](README.md)
 
 ---
 
-*Guide erstellt für neue Linux-Nutzer · Getestet auf Ubuntu 22.04 LTS*
+*Guide written for new Linux users · Tested on Ubuntu 22.04 LTS*
