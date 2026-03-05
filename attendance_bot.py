@@ -686,7 +686,21 @@ def capture_debug_artifacts(page):
 def find_present_option(page):
     root = get_latest_survey_root(page)
 
+    # The radio button IDs embed an ISO date like:
+    #   {msg_ts}-radio_buttons_action_{YYYY-MM-DD}T{HH:MM:SS}...-present-0
+    # Use today's UTC date to target ONLY today's survey, preventing the bot
+    # from clicking stale radio buttons from old (but still interactive) surveys.
+    from datetime import datetime, timezone
+    today_utc = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    logger.info("STATE=SURVEY_DATE_FILTER | today_utc=%s", today_utc)
+
     candidates = [
+        # --- Today-scoped selectors (preferred) ---
+        # Prefer input+check over label+click: Playwright's .check() properly
+        # toggles the radio and fires all necessary DOM events.
+        ("input-today", "check", page.locator(f'input[type="radio"][id*="{today_utc}"][id*="present"]')),
+        ("label-today", "click", page.locator(f'label[for*="{today_utc}"][for*="present"]')),
+        # --- Generic selectors within latest survey card (fallback) ---
         ("role-radio-text", "click", root.locator('[role="radio"]:has-text("present")')),
         ("role-radio-aria", "click", root.locator('[role="radio"][aria-label*="present" i]')),
         ("button-text", "click", root.locator('button:has-text("present")')),
@@ -985,6 +999,20 @@ def mark_present():
                 pass
             log_state("CHANNEL_MARKERS_MISSING_CONTINUING", page.url)
 
+        # Force a page reload to flush Slack's cached xoxc token from the
+        # browser profile's localStorage.  Stale tokens (days/weeks old) are
+        # silently accepted by Slack's API ("ok":true) but not properly
+        # attributed to the user, so Mia's bot receives the action but cannot
+        # record attendance. A reload forces Slack to issue a fresh session token.
+        try:
+            page.reload(wait_until="domcontentloaded", timeout=15000)
+            page.wait_for_load_state("domcontentloaded", timeout=10000)
+            dismiss_cookie_or_privacy_overlays(page)
+            wait_for_channel_content(page, timeout_s=20)
+            logger.info("STATE=PAGE_RELOADED_FOR_FRESH_TOKEN | %s", page.url)
+        except Exception as exc:
+            logger.warning("Page reload failed (continuing): %s", exc)
+
         # Always capture a debug screenshot so we can inspect what the bot sees.
         try:
             page.screenshot(path="/session/last_run.png", full_page=True)
@@ -1027,34 +1055,142 @@ def mark_present():
         newest_present = present_options.nth(count - 1)
         newest_present.scroll_into_view_if_needed()
 
-        # Prepare confirmation message check (from the Mia Attendance Bot)
-        confirmation_text = "Your selection (present) has been recorded successfully"
-        confirmation_locator = page.locator(
-            "div.p-rich_text_section",
-            has_text=confirmation_text,
-        )
-        previous_confirmations = confirmation_locator.count()
-
+        # Log which radio button we're about to click for diagnostics
         try:
-            if action == "check":
-                newest_present.check(timeout=5000)
-            else:
-                newest_present.click(timeout=5000)
+            radio_id = newest_present.get_attribute("for") or newest_present.get_attribute("id") or ""
+            if not radio_id:
+                # Try finding the radio input inside the label
+                inner_input = newest_present.locator('input[type="radio"]')
+                if inner_input.count() > 0:
+                    radio_id = inner_input.first.get_attribute("id") or ""
+            logger.info("STATE=CLICK_TARGET | selector=%s | count=%s | radio_id=%s", action, count, radio_id[:200])
         except Exception:
-            if action == "check":
-                newest_present.check(force=True)
-            else:
-                newest_present.click(force=True)
+            logger.info("STATE=CLICK_TARGET | selector=%s | count=%s | radio_id=UNKNOWN", action, count)
 
-        # Wait for the new confirmation message
+        # Prepare confirmation message check (from the Mia Attendance Bot).
+        # We scroll to bottom first so that any already-visible messages (e.g.
+        # today's morning confirmation) are loaded into the DOM before we take
+        # the baseline — preventing them from being mistaken for new responses.
+        confirmation_text = "Your selection (present) has been recorded successfully"
+        survey_root_for_confirm = get_latest_survey_root(page)
+        nudge_to_latest_messages(page)
+        page.wait_for_timeout(1500)
+        _all_sections = page.locator("div.p-rich_text_section")
+        _baseline_texts: set = set()
+        for _i in range(_all_sections.count()):
+            try:
+                _baseline_texts.add(_all_sections.nth(_i).inner_text().strip())
+            except Exception:
+                pass
+        previous_confirmations = sum(1 for t in _baseline_texts if confirmation_text in t)
+        logger.info(
+            "STATE=PRE_CLICK_DIAGNOSTICS | previous_confirmations=%s | baseline_count=%s",
+            previous_confirmations, len(_baseline_texts),
+        )
+
+        # Monitor network requests and responses around the click
+        api_requests_log = []
+        def _log_request(request):
+            url = request.url
+            if "/api/" in url and ("action" in url or "block" in url or "interact" in url or "unfurl" in url):
+                api_requests_log.append(f"{request.method} {url}")
+                logger.info("STATE=SLACK_API_REQUEST | %s %s", request.method, url)
+                try:
+                    post = request.post_data or ""
+                    logger.info("STATE=SLACK_API_REQUEST_BODY | %s", post[:1000])
+                except Exception:
+                    pass
+        def _log_response(response):
+            url = response.url
+            if "/api/" in url and ("action" in url or "block" in url or "interact" in url or "unfurl" in url):
+                try:
+                    body = response.text()
+                    logger.info("STATE=SLACK_API_RESPONSE | %s %s | %s", response.status, url, body[:500])
+                except Exception:
+                    logger.info("STATE=SLACK_API_RESPONSE | %s %s | (body unreadable)", response.status, url)
+        page.on("request", _log_request)
+        page.on("response", _log_response)
+
+        # --- Click with verification and retry ---
+        # Try multiple click strategies to ensure the radio is actually toggled.
+        click_strategies = []
+        if action == "check":
+            click_strategies = [
+                ("check", lambda: newest_present.check(timeout=5000)),
+                ("check-force", lambda: newest_present.check(force=True)),
+                ("js-click", lambda: newest_present.evaluate("el => el.click()")),
+            ]
+        else:
+            click_strategies = [
+                ("click", lambda: newest_present.click(timeout=5000)),
+                ("click-force", lambda: newest_present.click(force=True)),
+                ("js-click", lambda: newest_present.evaluate("el => el.click()")),
+            ]
+
+        for strategy_name, strategy_fn in click_strategies:
+            try:
+                strategy_fn()
+                logger.info("STATE=CLICK_STRATEGY | %s | success", strategy_name)
+            except Exception as exc:
+                logger.warning("STATE=CLICK_STRATEGY | %s | failed: %s", strategy_name, exc)
+                continue
+
+            # Brief pause to let Slack's JS process the event
+            page.wait_for_timeout(1500)
+
+            # Check if the radio was actually toggled
+            try:
+                radio_input = page.locator(f'input[type="radio"][id*="{today_utc}"][id*="present"]').last
+                is_checked = radio_input.is_checked()
+                logger.info("STATE=POST_CLICK_RADIO_STATE | strategy=%s | is_checked=%s", strategy_name, is_checked)
+                if is_checked:
+                    break
+                logger.warning("STATE=RADIO_NOT_TOGGLED | strategy=%s, trying next", strategy_name)
+            except Exception:
+                logger.info("STATE=POST_CLICK_RADIO_STATE | strategy=%s | check_failed", strategy_name)
+                break  # Can't verify, proceed with confirmation check
+
+        # Also capture a post-click screenshot for debugging
+        try:
+            page.screenshot(path="/session/post_click.png")
+            logger.info("STATE=POST_CLICK_SCREENSHOT_SAVED | /session/post_click.png")
+        except Exception:
+            pass
+
+        # Wait for a new response from Mia: success confirmation or rejection
+        # (outside window, already voted, etc.).  We compare against the full
+        # baseline text-set so that old messages never trigger a false positive.
         confirmed = False
+        mia_rejection_text = None
         timeout_s = 15
         start = time.time()
         while time.time() - start < timeout_s:
-            if confirmation_locator.count() > previous_confirmations:
-                confirmed = True
+            _cur_sections = page.locator("div.p-rich_text_section")
+            for _i in range(_cur_sections.count()):
+                try:
+                    _text = _cur_sections.nth(_i).inner_text().strip()
+                    if _text and _text not in _baseline_texts:
+                        logger.info("STATE=MIA_NEW_RESPONSE | %s", _text[:300])
+                        _baseline_texts.add(_text)  # avoid re-logging same text
+                        if confirmation_text in _text:
+                            confirmed = True
+                        elif not mia_rejection_text:
+                            mia_rejection_text = _text
+                except Exception:
+                    pass
+            if confirmed:
                 break
             time.sleep(0.5)
+
+        logger.info(
+            "STATE=POST_CLICK_DIAGNOSTICS | confirmed=%s | api_requests=%s | mia_rejection=%s",
+            confirmed, len(api_requests_log), bool(mia_rejection_text),
+        )
+        for req in api_requests_log:
+            logger.info("STATE=API_REQUEST_DETAIL | %s", req)
+
+        page.remove_listener("request", _log_request)
+        page.remove_listener("response", _log_response)
 
         if confirmed:
             log_state("PRESENT_RECORDED", confirmation_text)
@@ -1063,7 +1199,21 @@ def mark_present():
             close_context(browser, context)
             return "PRESENT_RECORDED"
 
-        closed_message = find_closed_survey_message(page)
+        # Mia responded but rejected the request (outside window, already voted…)
+        if mia_rejection_text:
+            logger.warning("STATE=MIA_REJECTION | %s", mia_rejection_text[:300])
+            log_state("SURVEY_CLOSED_AFTER_ATTEMPT", mia_rejection_text)
+            maybe_pause_for_debug("SURVEY_CLOSED_AFTER_ATTEMPT")
+            close_context(browser, context)
+            return "SURVEY_CLOSED"
+
+        # Take a post-click screenshot to aid debugging when confirmation is missing
+        capture_debug_artifacts(page)
+
+        # Only check for a closed message within the latest survey card.
+        # Searching the whole page would match old "closed" banners from earlier
+        # surveys and produce a false SURVEY_CLOSED_AFTER_ATTEMPT result.
+        closed_message = find_closed_survey_message(page, scope=survey_root_for_confirm)
         if closed_message:
             log_state("SURVEY_CLOSED_AFTER_ATTEMPT", closed_message)
             maybe_pause_for_debug("SURVEY_CLOSED_AFTER_ATTEMPT")
@@ -1079,7 +1229,35 @@ def mark_present():
         return "NO_CONFIRMATION_AFTER_CLICK"
 
 
+SESSION_MAX_AGE_DAYS = 7  # Re-authenticate if session file is older than this
+
+
 def ensure_session():
+    # Force re-authentication if the session file is too old.
+    # Slack's xoxc client tokens (cached in the browser profile) expire after
+    # a few weeks. A stale token causes blocks.actions to silently fail:
+    # Slack returns {"ok":true} but the action is not attributed to the user.
+    if os.path.exists(SESSION_FILE):
+        age_days = (time.time() - os.path.getmtime(SESSION_FILE)) / 86400
+        if age_days > SESSION_MAX_AGE_DAYS:
+            logger.info(
+                "STATE=SESSION_STALE | age_days=%.1f > max=%d | forcing re-auth",
+                age_days,
+                SESSION_MAX_AGE_DAYS,
+            )
+            try:
+                os.remove(SESSION_FILE)
+            except Exception:
+                pass
+            import shutil
+            profile_dir = BROWSER_PROFILE_DIR
+            if profile_dir and os.path.isdir(profile_dir):
+                try:
+                    shutil.rmtree(profile_dir)
+                    logger.info("STATE=PROFILE_CLEARED | %s", profile_dir)
+                except Exception as exc:
+                    logger.warning("Could not clear profile dir: %s", exc)
+
     # Reuse valid session if possible, otherwise login again
     if is_session_valid():
         log_state("SESSION_VALID")
