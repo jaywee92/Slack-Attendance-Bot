@@ -1,5 +1,6 @@
 from playwright.sync_api import sync_playwright
 from dotenv import load_dotenv
+from datetime import datetime, timezone
 import time
 import os
 import logging
@@ -690,16 +691,15 @@ def find_present_option(page):
     #   {msg_ts}-radio_buttons_action_{YYYY-MM-DD}T{HH:MM:SS}...-present-0
     # Use today's UTC date to target ONLY today's survey, preventing the bot
     # from clicking stale radio buttons from old (but still interactive) surveys.
-    from datetime import datetime, timezone
     today_utc = datetime.now(timezone.utc).strftime("%Y-%m-%d")
     logger.info("STATE=SURVEY_DATE_FILTER | today_utc=%s", today_utc)
 
     candidates = [
         # --- Today-scoped selectors (preferred) ---
-        # Prefer input+check over label+click: Playwright's .check() properly
-        # toggles the radio and fires all necessary DOM events.
-        ("input-today", "check", page.locator(f'input[type="radio"][id*="{today_utc}"][id*="present"]')),
+        # Click the visible LABEL (like a real user) rather than the hidden radio
+        # input. Clicking the label triggers Slack's real click event handlers.
         ("label-today", "click", page.locator(f'label[for*="{today_utc}"][for*="present"]')),
+        ("input-today", "check", page.locator(f'input[type="radio"][id*="{today_utc}"][id*="present"]')),
         # --- Generic selectors within latest survey card (fallback) ---
         ("role-radio-text", "click", root.locator('[role="radio"]:has-text("present")')),
         ("role-radio-aria", "click", root.locator('[role="radio"][aria-label*="present" i]')),
@@ -1097,7 +1097,7 @@ def mark_present():
                 logger.info("STATE=SLACK_API_REQUEST | %s %s", request.method, url)
                 try:
                     post = request.post_data or ""
-                    logger.info("STATE=SLACK_API_REQUEST_BODY | %s", post[:1000])
+                    logger.info("STATE=SLACK_API_REQUEST_BODY | %s", post[:5000])
                 except Exception:
                     pass
         def _log_response(response):
@@ -1157,55 +1157,66 @@ def mark_present():
         except Exception:
             pass
 
-        # Wait for a new response from Mia: success confirmation or rejection
-        # (outside window, already voted, etc.).  We compare against the full
-        # baseline text-set so that old messages never trigger a false positive.
-        confirmed = False
-        mia_rejection_text = None
-        timeout_s = 15
-        start = time.time()
-        while time.time() - start < timeout_s:
-            _cur_sections = page.locator("div.p-rich_text_section")
-            for _i in range(_cur_sections.count()):
-                try:
-                    _text = _cur_sections.nth(_i).inner_text().strip()
-                    if _text and _text not in _baseline_texts:
-                        logger.info("STATE=MIA_NEW_RESPONSE | %s", _text[:300])
-                        _baseline_texts.add(_text)  # avoid re-logging same text
-                        if confirmation_text in _text:
-                            confirmed = True
-                        elif not mia_rejection_text:
-                            mia_rejection_text = _text
-                except Exception:
-                    pass
-            if confirmed:
-                break
-            time.sleep(0.5)
-
-        logger.info(
-            "STATE=POST_CLICK_DIAGNOSTICS | confirmed=%s | api_requests=%s | mia_rejection=%s",
-            confirmed, len(api_requests_log), bool(mia_rejection_text),
-        )
+        # Log any new Slack text sections that appeared after clicking (debug only).
+        # NOTE: the text "Your selection (present) has been recorded successfully"
+        # is rendered CLIENT-SIDE by Slack's JS as an optimistic UI update —
+        # it appears in THIS browser session regardless of whether Mia's server
+        # actually recorded the attendance.  We therefore do NOT use DOM text as
+        # the confirmation signal; instead we reload the page and read the radio
+        # button's server-side persisted state.
+        page.wait_for_timeout(2000)
         for req in api_requests_log:
             logger.info("STATE=API_REQUEST_DETAIL | %s", req)
+        _cur_sections = page.locator("div.p-rich_text_section")
+        for _i in range(_cur_sections.count()):
+            try:
+                _text = _cur_sections.nth(_i).inner_text().strip()
+                if _text and _text not in _baseline_texts:
+                    logger.info("STATE=MIA_EPHEMERAL_LOCAL | %s", _text[:300])
+            except Exception:
+                pass
 
         page.remove_listener("request", _log_request)
         page.remove_listener("response", _log_response)
 
+        # --- Reload and verify server-side radio state ---
+        # Slack stores Block Kit radio-button selections per-user on its servers.
+        # After a full page reload the client fetches fresh message state from
+        # Slack — if the radio is still checked, the selection was persisted
+        # server-side and Mia received the interaction.
+        confirmed = False
+        try:
+            page.reload(wait_until="domcontentloaded", timeout=20000)
+            page.wait_for_load_state("domcontentloaded", timeout=10000)
+            dismiss_cookie_or_privacy_overlays(page)
+            wait_for_channel_content(page, timeout_s=20)
+            nudge_to_latest_messages(page)
+            page.wait_for_timeout(2000)
+            logger.info("STATE=POST_CLICK_RELOAD | checking server-side radio state")
+
+            _today_utc = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+            _radio = page.locator(
+                f'input[type="radio"][id*="{_today_utc}"][id*="present"]'
+            ).last
+            if _radio.count() == 0:
+                logger.warning("STATE=RADIO_NOT_FOUND_AFTER_RELOAD | no element matched")
+            else:
+                _is_checked = _radio.evaluate("el => el.checked")
+                logger.info("STATE=RADIO_SERVER_STATE | checked=%s", _is_checked)
+                confirmed = bool(_is_checked)
+        except Exception as exc:
+            logger.warning("STATE=POST_CLICK_RELOAD_FAILED | %s", exc)
+
+        logger.info(
+            "STATE=POST_CLICK_DIAGNOSTICS | confirmed=%s | api_requests=%s",
+            confirmed, len(api_requests_log),
+        )
+
         if confirmed:
-            log_state("PRESENT_RECORDED", confirmation_text)
-            # Small delay to ensure the click is registered
-            time.sleep(3)
+            log_state("PRESENT_RECORDED", "Radio button confirmed selected server-side after page reload")
+            time.sleep(2)
             close_context(browser, context)
             return "PRESENT_RECORDED"
-
-        # Mia responded but rejected the request (outside window, already voted…)
-        if mia_rejection_text:
-            logger.warning("STATE=MIA_REJECTION | %s", mia_rejection_text[:300])
-            log_state("SURVEY_CLOSED_AFTER_ATTEMPT", mia_rejection_text)
-            maybe_pause_for_debug("SURVEY_CLOSED_AFTER_ATTEMPT")
-            close_context(browser, context)
-            return "SURVEY_CLOSED"
 
         # Take a post-click screenshot to aid debugging when confirmation is missing
         capture_debug_artifacts(page)
@@ -1213,6 +1224,8 @@ def mark_present():
         # Only check for a closed message within the latest survey card.
         # Searching the whole page would match old "closed" banners from earlier
         # surveys and produce a false SURVEY_CLOSED_AFTER_ATTEMPT result.
+        # Re-fetch survey root since we reloaded the page above.
+        survey_root_for_confirm = get_latest_survey_root(page)
         closed_message = find_closed_survey_message(page, scope=survey_root_for_confirm)
         if closed_message:
             log_state("SURVEY_CLOSED_AFTER_ATTEMPT", closed_message)
