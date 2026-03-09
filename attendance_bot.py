@@ -1157,66 +1157,59 @@ def mark_present():
         except Exception:
             pass
 
-        # Log any new Slack text sections that appeared after clicking (debug only).
-        # NOTE: the text "Your selection (present) has been recorded successfully"
-        # is rendered CLIENT-SIDE by Slack's JS as an optimistic UI update —
-        # it appears in THIS browser session regardless of whether Mia's server
-        # actually recorded the attendance.  We therefore do NOT use DOM text as
-        # the confirmation signal; instead we reload the page and read the radio
-        # button's server-side persisted state.
-        page.wait_for_timeout(2000)
+        # Wait for Mia's response (up to 15 s).
+        # With label-click the interaction goes through Slack's real event
+        # handlers so Mia's server processes it and sends chat.postEphemeral
+        # back to ALL of the user's Slack sessions (verified empirically).
+        # The message appears as a new div.p-rich_text_section element.
+        # Note: Slack's HTML radio `checked` attribute is NOT set after page
+        # reload (Slack uses CSS for rendering), so post-reload el.checked is
+        # unreliable and is not used here.
+        confirmed = False
+        mia_rejection_text = None
+        timeout_s = 15
+        start = time.time()
+        while time.time() - start < timeout_s:
+            _cur_sections = page.locator("div.p-rich_text_section")
+            for _i in range(_cur_sections.count()):
+                try:
+                    _text = _cur_sections.nth(_i).inner_text().strip()
+                    if _text and _text not in _baseline_texts:
+                        logger.info("STATE=MIA_RESPONSE | %s", _text[:300])
+                        _baseline_texts.add(_text)
+                        if confirmation_text in _text:
+                            confirmed = True
+                        elif not mia_rejection_text:
+                            mia_rejection_text = _text
+                except Exception:
+                    pass
+            if confirmed:
+                break
+            time.sleep(0.5)
+
         for req in api_requests_log:
             logger.info("STATE=API_REQUEST_DETAIL | %s", req)
-        _cur_sections = page.locator("div.p-rich_text_section")
-        for _i in range(_cur_sections.count()):
-            try:
-                _text = _cur_sections.nth(_i).inner_text().strip()
-                if _text and _text not in _baseline_texts:
-                    logger.info("STATE=MIA_EPHEMERAL_LOCAL | %s", _text[:300])
-            except Exception:
-                pass
 
         page.remove_listener("request", _log_request)
         page.remove_listener("response", _log_response)
 
-        # --- Reload and verify server-side radio state ---
-        # Slack stores Block Kit radio-button selections per-user on its servers.
-        # After a full page reload the client fetches fresh message state from
-        # Slack — if the radio is still checked, the selection was persisted
-        # server-side and Mia received the interaction.
-        confirmed = False
-        try:
-            page.reload(wait_until="domcontentloaded", timeout=20000)
-            page.wait_for_load_state("domcontentloaded", timeout=10000)
-            dismiss_cookie_or_privacy_overlays(page)
-            wait_for_channel_content(page, timeout_s=20)
-            nudge_to_latest_messages(page)
-            page.wait_for_timeout(2000)
-            logger.info("STATE=POST_CLICK_RELOAD | checking server-side radio state")
-
-            _today_utc = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-            _radio = page.locator(
-                f'input[type="radio"][id*="{_today_utc}"][id*="present"]'
-            ).last
-            if _radio.count() == 0:
-                logger.warning("STATE=RADIO_NOT_FOUND_AFTER_RELOAD | no element matched")
-            else:
-                _is_checked = _radio.evaluate("el => el.checked")
-                logger.info("STATE=RADIO_SERVER_STATE | checked=%s", _is_checked)
-                confirmed = bool(_is_checked)
-        except Exception as exc:
-            logger.warning("STATE=POST_CLICK_RELOAD_FAILED | %s", exc)
-
         logger.info(
-            "STATE=POST_CLICK_DIAGNOSTICS | confirmed=%s | api_requests=%s",
-            confirmed, len(api_requests_log),
+            "STATE=POST_CLICK_DIAGNOSTICS | confirmed=%s | api_requests=%s | mia_rejection=%s",
+            confirmed, len(api_requests_log), bool(mia_rejection_text),
         )
 
         if confirmed:
-            log_state("PRESENT_RECORDED", "Radio button confirmed selected server-side after page reload")
+            log_state("PRESENT_RECORDED", confirmation_text)
             time.sleep(2)
             close_context(browser, context)
             return "PRESENT_RECORDED"
+
+        if mia_rejection_text:
+            logger.warning("STATE=MIA_REJECTION | %s", mia_rejection_text[:300])
+            log_state("SURVEY_CLOSED_AFTER_ATTEMPT", mia_rejection_text)
+            maybe_pause_for_debug("SURVEY_CLOSED_AFTER_ATTEMPT")
+            close_context(browser, context)
+            return "SURVEY_CLOSED"
 
         # Take a post-click screenshot to aid debugging when confirmation is missing
         capture_debug_artifacts(page)
