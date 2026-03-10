@@ -1235,7 +1235,7 @@ def mark_present():
         return "NO_CONFIRMATION_AFTER_CLICK"
 
 
-SESSION_MAX_AGE_DAYS = 7  # Re-authenticate if session file is older than this
+SESSION_MAX_AGE_DAYS = 1  # Re-authenticate daily to keep xoxc token fresh
 
 
 def ensure_session():
