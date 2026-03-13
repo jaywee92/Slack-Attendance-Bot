@@ -10,6 +10,8 @@ services:
       - /etc/timezone:/etc/timezone:ro
     environment:
       - TZ=Europe/Berlin
+      - ATTENDANCE_DEBUG_SCREENSHOT=/session/attendance_debug.png
+      - ATTENDANCE_DEBUG_HTML=/session/attendance_debug.html
 
   bot-vnc:
     build:
